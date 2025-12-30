@@ -6,6 +6,7 @@
     holding buffers for the duration of a data transfer."
 )]
 
+mod flow_sensor;
 mod tmc2209;
 mod usb;
 
@@ -41,10 +42,14 @@ async fn main(spawner: Spawner) -> ! {
     tmc.enable();
     info!("TMC2209 initialized");
 
+    let mut sensor =
+        flow_sensor::FlowSensor::new(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO1);
+    info!("Flow sensor initialized");
+
     spawner.spawn(server()).unwrap();
     Timer::after_secs(4).await;
 
-    usb::protocol_task(peripherals.USB_DEVICE).await;
+    usb::protocol_task(peripherals.USB_DEVICE, sensor).await;
 }
 
 #[embassy_executor::task]

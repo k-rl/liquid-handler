@@ -1,3 +1,4 @@
+use crate::flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType};
 use alloc::{vec, vec::Vec};
 use core::{result, slice};
 use defmt::{info, Format};
@@ -58,17 +59,8 @@ enum Response {
     Fail,
 }
 
-#[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
-#[deku(ctx = "endian: deku::ctx::Endian", endian = "endian")]
-struct FlowSensorInfo {
-    air_in_line: bool,
-    high_flow: bool,
-    exponential_smoothing_active: bool,
-    ul_per_min: f64,
-    degrees_c: f64,
-}
-
-pub async fn protocol_task(device: USB_DEVICE<'_>) -> ! {
+pub async fn protocol_task(device: USB_DEVICE<'_>, mut sensor: FlowSensor<'_>) -> ! {
+    sensor.start(LiquidType::Water).await.unwrap();
     let mut stream = PacketStream::new(device, Duration::from_secs(1));
     loop {
         let Ok(packet) = stream.read().await else {
@@ -78,13 +70,7 @@ pub async fn protocol_task(device: USB_DEVICE<'_>) -> ! {
         let response = if let Ok((_, packet)) = Request::from_bytes((&packet, 0)) {
             match packet {
                 Request::Init => Response::Init,
-                Request::FlowSensorInfo => Response::FlowSensorInfo(FlowSensorInfo {
-                    air_in_line: false,
-                    high_flow: true,
-                    exponential_smoothing_active: false,
-                    ul_per_min: 100.32,
-                    degrees_c: 33.1,
-                }),
+                Request::FlowSensorInfo => Response::FlowSensorInfo(sensor.read().await.unwrap()),
                 Request::SetPumpRpm(rpm) => Response::SetPumpRpm,
             }
         } else {
