@@ -2,11 +2,14 @@
 runner = "probe-rs run --chip=esp32s3 --preverify --always-print-stacktrace --no-location --catch-hardfault"
 
 [env]
-DEFMT_LOG="info"
+DEFMT_LOG = "info"
 
 [build]
 rustflags = [
-  "-C", "link-arg=-nostartfiles",
+  "-C",
+  "link-arg=-nostartfiles",
+  "-C",
+  "link-arg=-zstack-size=0x8000",
 ]
 
 target = "xtensa-esp32s3-none-elf"
