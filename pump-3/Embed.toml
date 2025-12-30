@@ -1,0 +1,15 @@
+[default.probe]
+protocol = "Jtag"
+usb_vid = "303a"
+usb_pid = "1001"
+
+[default.rtt]
+enabled = true
+timeout = 3000
+
+[[default.rtt.up_channels]]
+channel = 0
+format = "Defmt"
+
+[default.general]
+chip = "esp32s3"
