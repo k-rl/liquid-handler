@@ -34,6 +34,7 @@ rtt-target = { version = "0.6.1", features = ["defmt"] }
 static_cell = "2.1.1"
 thiserror = { version = "2.0.17", default-features = false }
 libm = "0.2.15"
+embassy-sync = { version = "0.7.2", features = ["defmt"] }
 
 [patch.crates-io]
 bitvec = { git = "https://github.com/ferrilab/ferrilab.git", package = "bitvec", rev = "aa1c33c934e734d0b05fe0b2ab61dfff8707de11" }

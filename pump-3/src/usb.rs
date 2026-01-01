@@ -1,8 +1,6 @@
-use crate::flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType};
 use alloc::{vec, vec::Vec};
 use core::{result, slice};
-use defmt::{debug, info, Format};
-use deku::prelude::*;
+use defmt::info;
 use embassy_time::{Duration, TimeoutError};
 use embedded_io_async::{Read, Write};
 use esp_hal::{peripherals::USB_DEVICE, usb_serial_jtag::UsbSerialJtag, Async};
@@ -23,41 +21,6 @@ impl From<TimeoutError> for Error {
 }
 
 type Result<T> = result::Result<T, Error>;
-
-// Request/response codes.
-const INIT: u8 = 0x00;
-const FLOW_SENSOR_INFO: u8 = 0x01;
-const SET_PUMP_RPM: u8 = 0x02;
-const FAIL: u8 = 0xFF;
-
-#[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
-#[deku(id_type = "u8", endian = "big")]
-pub enum Request {
-    #[deku(id = "INIT")]
-    Init,
-
-    #[deku(id = "FLOW_SENSOR_INFO")]
-    FlowSensorInfo,
-
-    #[deku(id = "SET_PUMP_RPM")]
-    SetPumpRpm(f64),
-}
-
-#[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
-#[deku(id_type = "u8", endian = "big")]
-pub enum Response {
-    #[deku(id = "INIT")]
-    Init,
-
-    #[deku(id = "FLOW_SENSOR_INFO")]
-    FlowSensorInfo(FlowSensorInfo),
-
-    #[deku(id = "SET_PUMP_RPM")]
-    SetPumpRpm,
-
-    #[deku(id = "FAIL")]
-    Fail,
-}
 
 pub struct PacketStream<'a> {
     usb: UsbSerialJtag<'a, Async>,
