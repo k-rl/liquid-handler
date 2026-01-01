@@ -19,7 +19,6 @@ use defmt::{info, Format};
 use deku::prelude::*;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
-use embassy_time::Duration;
 use embassy_time::Timer;
 use esp_hal::{self, clock::CpuClock, peripherals::USB_DEVICE, timer::timg::TimerGroup};
 use panic_rtt_target as _;
@@ -96,9 +95,8 @@ async fn main(spawner: Spawner) -> ! {
     info!("Flow sensor initialized.");
     sensor.start(LiquidType::Water).await.unwrap();
 
-    spawner.spawn(run_tmc(tmc)).unwrap();
     Timer::after_secs(4).await;
-
+    spawner.spawn(run_tmc(tmc)).unwrap();
     run_coordinator(peripherals.USB_DEVICE, sensor).await;
 }
 
@@ -138,11 +136,43 @@ async fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
     tmc.enable();
     tmc.init().await.unwrap();
     info!("TMC2209 initialized.");
+    let mut v = 0.0;
+    let a = 100.0;
+    let dx = 1.0 / (tmc.pulses_per_rev() as f64);
+    let mut i = 0;
     loop {
-        let rpm = *RPM.lock().await;
-        info!("RPM: {}", rpm);
-        Timer::after_secs(2).await;
-        // tmc.step_loop(100.0, 100.0).await.unwrap();
-        // Timer::after_millis(500).await;
+        i += 1;
+
+        let prev_v = v;
+        let target_v = *RPM.lock().await;
+        let v2 = v * v;
+        let dv2 = 2.0 * a * dx;
+        let diff = target_v * target_v - v2;
+        if diff.abs() < dv2 {
+            v = target_v;
+        } else {
+            v = libm::sqrt(v2 + diff.signum() * dv2);
+        }
+
+        if i % 1000 == 0 {
+            info!("dx: {}", dx);
+            info!("v2: {}", v2);
+            info!("target_v2: {}", target_v * target_v);
+            info!("prev_v: {}", prev_v);
+            info!("v: {}", v);
+            info!("diff: {}", diff);
+            info!("target_v: {}", target_v);
+        }
+        if v < 1e-6 {
+            Timer::after_millis(10).await;
+            continue;
+        }
+
+        tmc.toggle_step();
+        let dt = 2.0 * dx / (v + prev_v);
+        Timer::after_micros((dt * 60e6) as u64).await;
+        if i % 1000 == 0 {
+            info!("Iteration: {} {}", i, dt * 60e6);
+        }
     }
 }

@@ -592,7 +592,7 @@ pub struct Tmc2209<'a> {
     address: u8,
     timeout: Duration,
     sense_ohms: f64,
-    steps_per_rev: f64,
+    steps_per_rev: u32,
     global_config: GlobalConfig,
     resp_delay: u8,
     current_config: CurrentConfig,
@@ -634,7 +634,7 @@ impl<'a> Tmc2209<'a> {
             address: 0,
             timeout: Duration::from_millis(100),
             sense_ohms: 0.110,
-            steps_per_rev: 200.0,
+            steps_per_rev: 200,
             global_config: GlobalConfig {
                 test_mode: false,
                 filter_step_pulses: true,
@@ -770,7 +770,7 @@ impl<'a> Tmc2209<'a> {
         self
     }
 
-    pub fn steps_per_rev(&mut self, steps: f64) -> &mut Self {
+    pub fn steps_per_rev(&mut self, steps: u32) -> &mut Self {
         self.steps_per_rev = steps;
         self
     }
@@ -856,6 +856,7 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn velocity(&mut self, velocity: i32) -> &mut Self {
+        // TODO: Let's make this also use the same rpm variable we have already.
         self.vel = velocity;
         self
     }
@@ -1011,40 +1012,8 @@ impl<'a> Tmc2209<'a> {
     // ========================
     // ====Motion Control======
     // ========================
-    pub async fn step_loop(&mut self, target_rpm: f64, accel_rpm2: f64) -> Result<()> {
-        // Calculate microstep multiplier based on resolution
-        let msteps_per_step = match self.driver_config.microstep_resolution {
-            MicrostepResolution::M256 => 256,
-            MicrostepResolution::M128 => 128,
-            MicrostepResolution::M64 => 64,
-            MicrostepResolution::M32 => 32,
-            MicrostepResolution::M16 => 16,
-            MicrostepResolution::M8 => 8,
-            MicrostepResolution::M4 => 4,
-            MicrostepResolution::M2 => 2,
-            MicrostepResolution::M1 => 1,
-        } as f64;
-        let pulses_per_mstep = if self.driver_config.double_edge_step {
-            1.0
-        } else {
-            2.0
-        };
-        let target_v = target_rpm / 60.0;
-        let a = accel_rpm2 / 3600.0;
-        let mut v = 0.0;
-        let mut t = 0.01;
-        let temp = 1.0 / (pulses_per_mstep * msteps_per_step * self.steps_per_rev * target_v);
-        defmt::info!("V====={}", temp);
-        loop {
-            let dt = 2.0 * t;
-            v = (v + a * dt).min(target_v);
-            t = 1.0 / (pulses_per_mstep * msteps_per_step * self.steps_per_rev * v);
-            let delay = Duration::from_micros((t * 1_000_000.0) as u64);
-            self.step_pin.set_high();
-            embassy_time::Timer::after(delay).await;
-            self.step_pin.set_low();
-            embassy_time::Timer::after(delay).await;
-        }
+    pub fn toggle_step(&mut self) {
+        self.step_pin.toggle();
     }
 
     // ========================
@@ -1269,6 +1238,26 @@ impl<'a> Tmc2209<'a> {
         state.scale = data.scale;
         state.offset = data.offset;
         Ok(state)
+    }
+
+    pub fn pulses_per_rev(&self) -> u32 {
+        let msteps_per_step = match self.driver_config.microstep_resolution {
+            MicrostepResolution::M256 => 256,
+            MicrostepResolution::M128 => 128,
+            MicrostepResolution::M64 => 64,
+            MicrostepResolution::M32 => 32,
+            MicrostepResolution::M16 => 16,
+            MicrostepResolution::M8 => 8,
+            MicrostepResolution::M4 => 4,
+            MicrostepResolution::M2 => 2,
+            MicrostepResolution::M1 => 1,
+        } as u32;
+        let pulses_per_mstep = if self.driver_config.double_edge_step {
+            1
+        } else {
+            2
+        };
+        pulses_per_mstep * msteps_per_step * self.steps_per_rev
     }
 
     // ===========================
