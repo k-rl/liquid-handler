@@ -16,5 +16,5 @@ format = "Defmt"
 chip = "esp32s3"
 
 [default.flashing]
-enabled = true
+enabled = false
 disable_double_buffering = true
