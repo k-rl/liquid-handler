@@ -15,6 +15,7 @@ use crate::{
     tmc2209::Tmc2209,
     usb::PacketStream,
 };
+use core::marker::Send;
 use defmt::{info, Format};
 use deku::prelude::*;
 use embassy_executor::Spawner;
@@ -23,10 +24,19 @@ use embassy_time::{Duration, Timer};
 use esp_hal::{
     self,
     clock::CpuClock,
-    peripherals::{TIMG0, USB_DEVICE},
+    gpio::{
+        interconnect::{PeripheralInput, PeripheralOutput},
+        OutputPin,
+    },
+    interrupt::software::SoftwareInterruptControl,
+    peripherals::{CPU_CTRL, SW_INTERRUPT, TIMG0, USB_DEVICE},
+    system::Stack,
     time,
     timer::timg::{MwdtStage, TimerGroup, Wdt},
+    uart::Instance,
 };
+use esp_rtos::embassy::Executor;
+
 use panic_rtt_target as _;
 
 extern crate alloc;
@@ -40,7 +50,7 @@ const FAIL: u8 = 0xFF;
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
 #[deku(id_type = "u8", endian = "big")]
-pub enum Request {
+enum Request {
     #[deku(id = "INIT")]
     Init,
 
@@ -56,7 +66,7 @@ pub enum Request {
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
 #[deku(id_type = "u8", endian = "big")]
-pub enum Response {
+enum Response {
     #[deku(id = "INIT")]
     Init,
 
@@ -94,8 +104,9 @@ async fn main(spawner: Spawner) -> ! {
     watchdog.enable();
     spawner.spawn(run_watchdog_monitor(watchdog)).unwrap();
 
-    // Initialize TMC2209 stepper driver
-    let tmc = tmc2209::Tmc2209::new(
+    start_second_core(
+        peripherals.SW_INTERRUPT,
+        peripherals.CPU_CTRL,
         peripherals.UART1,
         peripherals.GPIO13, // TX
         peripherals.GPIO10, // RX
@@ -103,7 +114,6 @@ async fn main(spawner: Spawner) -> ! {
         peripherals.GPIO8,  // DIR
         peripherals.GPIO7,  // ENABLE
     );
-    spawner.spawn(run_tmc(tmc)).unwrap();
 
     // Initialize the sensor and coordinator.
     let mut sensor = FlowSensor::new(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO1);
@@ -112,7 +122,7 @@ async fn main(spawner: Spawner) -> ! {
     run_coordinator(peripherals.USB_DEVICE, sensor).await;
 }
 
-pub async fn run_coordinator<'a>(device: USB_DEVICE<'a>, mut sensor: FlowSensor<'a>) -> ! {
+async fn run_coordinator<'a>(device: USB_DEVICE<'a>, mut sensor: FlowSensor<'a>) -> ! {
     let mut stream = PacketStream::new(device, Duration::from_secs(1));
     loop {
         let Ok(packet) = stream.read().await else {
@@ -151,6 +161,36 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
     }
 }
 
+fn start_second_core(
+    interrupt: SW_INTERRUPT<'static>,
+    cpu_ctrl: CPU_CTRL,
+    uart: impl Instance + Send + 'static,
+    tx: impl PeripheralOutput<'static> + Send + 'static,
+    rx: impl PeripheralInput<'static> + Send + 'static,
+    step: impl OutputPin + 'static + Send,
+    dir: impl OutputPin + 'static + Send,
+    disable: impl OutputPin + 'static + Send,
+) {
+    let irc = SoftwareInterruptControl::new(interrupt);
+    static mut STACK: Stack<8192> = Stack::new();
+    #[allow(static_mut_refs)]
+    esp_rtos::start_second_core(
+        cpu_ctrl,
+        irc.software_interrupt0,
+        irc.software_interrupt1,
+        unsafe { &mut STACK },
+        move || {
+            static mut E: Executor = Executor::new();
+            unsafe {
+                E.run(|s| {
+                    let tmc = Tmc2209::new(uart, tx, rx, step, dir, disable);
+                    s.spawn(run_tmc(tmc)).unwrap();
+                })
+            }
+        },
+    );
+}
+
 #[embassy_executor::task]
 async fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
     tmc.enable();
@@ -172,7 +212,6 @@ async fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
             v = libm::sqrt(v2 + diff.signum() * dv2);
         }
 
-        tmc.toggle_step();
         let dt = 2.0 * dx / (v + prev_v + 1e-10);
         if i % 1000 == 0 {
             info!("====Iteration: {}====", i);
@@ -187,6 +226,7 @@ async fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
         }
 
         if dt < 1.0 {
+            tmc.toggle_step();
             Timer::after_micros((dt * 1e6) as u64).await;
         } else {
             Timer::after_millis(10).await;

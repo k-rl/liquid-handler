@@ -26,7 +26,7 @@ esp-rtos = { version = "0.2.0", features = [
   "esp32s3",
 ] }
 critical-section = "1.2.0"
-embassy-executor = { version = "0.9.0", features = ["defmt"] }
+embassy-executor = { version = "0.9.1", features = ["defmt"] }
 embassy-time = { version = "0.5.0", features = ["defmt"] }
 panic-rtt-target = { version = "0.2.0", features = ["defmt"] }
 radium = { version = "1.1", features = ["portable-atomic-fallback"] }
@@ -43,6 +43,7 @@ bitvec = { git = "https://github.com/ferrilab/ferrilab.git", package = "bitvec",
 # Rust debug is too slow.
 # For debug builds always builds with some optimization
 opt-level = "s"
+debug = 2
 
 [profile.release]
 codegen-units = 1        # LLVM can perform better optimizations using a single thread
