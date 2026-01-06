@@ -44,8 +44,8 @@ extern crate alloc;
 // Request/response codes.
 const INIT: u8 = 0x00;
 const FLOW_SENSOR_INFO: u8 = 0x01;
-const SET_PUMP_RPS: u8 = 0x02;
-const GET_PUMP_RPS: u8 = 0x03;
+const SET_PUMP_RPM: u8 = 0x02;
+const GET_PUMP_RPM: u8 = 0x03;
 const FAIL: u8 = 0xFF;
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
@@ -57,10 +57,10 @@ enum Request {
     #[deku(id = "FLOW_SENSOR_INFO")]
     FlowSensorInfo,
 
-    #[deku(id = "SET_PUMP_RPS")]
+    #[deku(id = "SET_PUMP_RPM")]
     SetPumpRps(f64),
 
-    #[deku(id = "GET_PUMP_RPS")]
+    #[deku(id = "GET_PUMP_RPM")]
     GetPumpRps,
 }
 
@@ -73,10 +73,10 @@ enum Response {
     #[deku(id = "FLOW_SENSOR_INFO")]
     FlowSensorInfo(FlowSensorInfo),
 
-    #[deku(id = "SET_PUMP_RPS")]
+    #[deku(id = "SET_PUMP_RPM")]
     SetPumpRps,
 
-    #[deku(id = "GET_PUMP_RPS")]
+    #[deku(id = "GET_PUMP_RPM")]
     GetPumpRps(f64),
 
     #[deku(id = "FAIL")]
@@ -85,7 +85,7 @@ enum Response {
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-static RPS: Mutex<CriticalSectionRawMutex, f64> = Mutex::new(0.0);
+static RPM: Mutex<CriticalSectionRawMutex, f64> = Mutex::new(0.0);
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -135,11 +135,11 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>, mut sensor: FlowSensor<'a>)
             match packet {
                 Request::Init => Response::Init,
                 Request::FlowSensorInfo => Response::FlowSensorInfo(sensor.read().await.unwrap()),
-                Request::SetPumpRps(rps) => {
-                    *RPS.lock().await = rps;
+                Request::SetPumpRps(rpm) => {
+                    *RPM.lock().await = rpm;
                     Response::SetPumpRps
                 }
-                Request::GetPumpRps => Response::GetPumpRps(*RPS.lock().await),
+                Request::GetPumpRps => Response::GetPumpRps(*RPM.lock().await),
             }
         } else {
             Response::Fail
@@ -203,7 +203,7 @@ async fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
     let mut i = 0;
     loop {
         let prev_v = v;
-        let target_v = *RPS.lock().await;
+        let target_v = *RPM.lock().await;
         let v2 = v * v;
         let diff = target_v * target_v - v2;
         if diff.abs() < dv2 {
