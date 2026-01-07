@@ -3,7 +3,6 @@
 use core::result;
 use deku::ctx::BitSize;
 use deku::prelude::*;
-use embassy_time::Duration;
 use esp_hal::{
     gpio::{
         interconnect::{PeripheralInput, PeripheralOutput},
@@ -590,7 +589,6 @@ pub struct Tmc2209<'a> {
     dir_pin: Output<'a>,
     disable_pin: Output<'a>,
     address: u8,
-    timeout: Duration,
     sense_ohms: f64,
     steps_per_rev: u32,
     global_config: GlobalConfig,
@@ -632,7 +630,6 @@ impl<'a> Tmc2209<'a> {
             dir_pin,
             disable_pin,
             address: 0,
-            timeout: Duration::from_millis(100),
             sense_ohms: 0.110,
             steps_per_rev: 200,
             global_config: GlobalConfig {
@@ -765,11 +762,6 @@ impl<'a> Tmc2209<'a> {
     // =============================
 
     // Global Configs
-    pub fn timeout(&mut self, timeout: Duration) -> &mut Self {
-        self.timeout = timeout;
-        self
-    }
-
     pub fn steps_per_rev(&mut self, steps: u32) -> &mut Self {
         self.steps_per_rev = steps;
         self
