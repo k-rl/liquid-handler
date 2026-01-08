@@ -15,15 +15,16 @@ use crate::{
     tmc2209::Tmc2209,
     usb::PacketStream,
 };
-use core::marker::Send;
+use core::{cell::RefCell, marker::Send};
 use defmt::{info, Format};
 use deku::prelude::*;
 use embassy_executor::Spawner;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex};
+use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, blocking_mutex::Mutex};
 use embassy_time::{Duration, Timer};
 use esp_hal::{
     self,
     clock::CpuClock,
+    delay::Delay,
     gpio::{
         interconnect::{PeripheralInput, PeripheralOutput},
         OutputPin,
@@ -35,7 +36,6 @@ use esp_hal::{
     timer::timg::{MwdtStage, TimerGroup, Wdt},
     uart::Instance,
 };
-use esp_rtos::embassy::Executor;
 
 use panic_rtt_target as _;
 
@@ -85,7 +85,7 @@ enum Response {
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-static RPM: Mutex<CriticalSectionRawMutex, f64> = Mutex::new(0.0);
+static RPM: Mutex<CriticalSectionRawMutex, RefCell<f64>> = Mutex::new(RefCell::new(0.0));
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -136,10 +136,10 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>, mut sensor: FlowSensor<'a>)
                 Request::Init => Response::Init,
                 Request::FlowSensorInfo => Response::FlowSensorInfo(sensor.read().await.unwrap()),
                 Request::SetPumpRps(rpm) => {
-                    *RPM.lock().await = rpm;
+                    RPM.lock(|x| x.replace(rpm));
                     Response::SetPumpRps
                 }
-                Request::GetPumpRps => Response::GetPumpRps(*RPM.lock().await),
+                Request::GetPumpRps => Response::GetPumpRps(RPM.lock(|x| *x.borrow())),
             }
         } else {
             Response::Fail
@@ -173,6 +173,7 @@ fn start_second_core(
 ) {
     let irc = SoftwareInterruptControl::new(interrupt);
     static mut STACK: Stack<8192> = Stack::new();
+    let tmc = Tmc2209::new(uart, tx, rx, step, dir, disable);
     #[allow(static_mut_refs)]
     esp_rtos::start_second_core(
         cpu_ctrl,
@@ -180,19 +181,13 @@ fn start_second_core(
         irc.software_interrupt1,
         unsafe { &mut STACK },
         move || {
-            static mut E: Executor = Executor::new();
-            unsafe {
-                E.run(|s| {
-                    let tmc = Tmc2209::new(uart, tx, rx, step, dir, disable);
-                    s.spawn(run_tmc(tmc)).unwrap();
-                })
-            }
+            run_tmc(tmc);
         },
     );
 }
 
-#[embassy_executor::task]
-async fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
+fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
+    let delay = Delay::new();
     tmc.enable();
     tmc.init().unwrap();
     info!("TMC2209 initialized.");
@@ -203,7 +198,7 @@ async fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
     let mut i = 0;
     loop {
         let prev_v = v;
-        let target_v = *RPM.lock().await;
+        let target_v = RPM.lock(|x| *x.borrow());
         let v2 = v * v;
         let diff = target_v * target_v - v2;
         if diff.abs() < dv2 {
@@ -227,9 +222,9 @@ async fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
 
         if dt < 1.0 {
             tmc.toggle_step();
-            Timer::after_micros((dt * 1e6) as u64).await;
+            delay.delay_micros((dt * 1e6) as u32);
         } else {
-            Timer::after_millis(10).await;
+            delay.delay_millis(10);
         }
         i += 1;
     }
