@@ -607,13 +607,13 @@ pub struct Tmc2209<'a> {
     sense_ohms: f64,
     steps_per_rev: u32,
     global_config: GlobalConfig,
-    resp_delay: u8,
+    response_delay: u8,
     current_config: CurrentConfig,
-    pwrdown_delay: u8,
-    pwm_thresh: u32,
-    vel: i32,
-    coolstep_thresh: u32,
-    stallguard_thresh: u8,
+    powerdown_delay: u8,
+    pwm_threshold: u32,
+    velocity: i32,
+    coolstep_threshold: u32,
+    stallguard_threshold: u8,
     coolstep_config: CoolstepConfig,
     driver_config: DriverConfig,
     pwm_config: PwmConfig,
@@ -654,17 +654,17 @@ impl<'a> Tmc2209<'a> {
                 internal_sense_resistor: false,
                 external_current_scaling: false,
             },
-            resp_delay: 3,
+            response_delay: 3,
             current_config: CurrentConfig {
                 stopped_current_scale: 10,
                 running_current_scale: 0,
                 powerdown_time: 8,
             },
-            pwrdown_delay: 20,
-            pwm_thresh: 999999,
-            vel: 0,
-            coolstep_thresh: 0,
-            stallguard_thresh: 0,
+            powerdown_delay: 20,
+            pwm_threshold: 999999,
+            velocity: 0,
+            coolstep_threshold: 0,
+            stallguard_threshold: 0,
             coolstep_config: CoolstepConfig {
                 lower_min_current: false,
                 current_downstep_rate: 0,
@@ -715,7 +715,7 @@ impl<'a> Tmc2209<'a> {
 
         self.write_register(
             RESPONSE_DELAY_REG,
-            FrameData::ResponseDelay(self.resp_delay),
+            FrameData::ResponseDelay(self.response_delay),
         )?;
 
         self.write_register(
@@ -725,21 +725,24 @@ impl<'a> Tmc2209<'a> {
 
         self.write_register(
             POWER_DOWN_DELAY_REG,
-            FrameData::PowerDownDelay(self.pwrdown_delay),
+            FrameData::PowerDownDelay(self.powerdown_delay),
         )?;
 
-        self.write_register(PWM_THRESHOLD_REG, FrameData::PwmThreshold(self.pwm_thresh))?;
+        self.write_register(
+            PWM_THRESHOLD_REG,
+            FrameData::PwmThreshold(self.pwm_threshold),
+        )?;
 
-        self.write_register(VELOCITY_REG, FrameData::Velocity(self.vel))?;
+        self.write_register(VELOCITY_REG, FrameData::Velocity(self.velocity))?;
 
         self.write_register(
             COOLSTEP_THRESHOLD_REG,
-            FrameData::CoolstepThreshold(self.coolstep_thresh),
+            FrameData::CoolstepThreshold(self.coolstep_threshold),
         )?;
 
         self.write_register(
             STALLGUARD_THRESHOLD_REG,
-            FrameData::StallguardThreshold(self.stallguard_thresh),
+            FrameData::StallguardThreshold(self.stallguard_threshold),
         )?;
 
         self.write_register(
@@ -817,7 +820,7 @@ impl<'a> Tmc2209<'a> {
             (0..=15).contains(&delay),
             "Response delay must be between 0 and 15."
         );
-        self.resp_delay = delay;
+        self.response_delay = delay;
         self
     }
 
@@ -838,29 +841,29 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn powerdown_delay(&mut self, delay: u8) -> &mut Self {
-        self.pwrdown_delay = delay;
+        self.powerdown_delay = delay;
         self
     }
 
     pub fn pwm_threshold(&mut self, threshold: u32) -> &mut Self {
-        self.pwm_thresh = threshold;
+        self.pwm_threshold = threshold;
         self
     }
 
-    pub fn velocity(&mut self, velocity: i32) -> &mut Self {
-        // TODO: Let's make this also use the same rpm variable we have already.
-        self.vel = velocity;
+    pub fn velocity(&mut self, rpm: f64) -> &mut Self {
+        let pps = (self.pulses_per_rev() as f64) * rpm / 60.0;
+        self.velocity = (pps / 0.715) as i32;
         self
     }
 
     // Stallguard and coolstep control
     pub fn coolstep_threshold(&mut self, threshold: u32) -> &mut Self {
-        self.coolstep_thresh = threshold;
+        self.coolstep_threshold = threshold;
         self
     }
 
     pub fn stallguard_threshold(&mut self, threshold: u8) -> &mut Self {
-        self.stallguard_thresh = threshold;
+        self.stallguard_threshold = threshold;
         self
     }
 
