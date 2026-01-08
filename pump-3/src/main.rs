@@ -15,6 +15,7 @@ use crate::{
     tmc2209::Tmc2209,
     usb::PacketStream,
 };
+use alloc::sync::Arc;
 use core::cell::RefCell;
 use defmt::{info, Format};
 use deku::prelude::*;
@@ -80,6 +81,8 @@ enum Response {
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
+type TmcMutex<'a> = Arc<Mutex<CriticalSectionRawMutex, RefCell<Tmc2209<'a>>>>;
+
 static RPM: Mutex<CriticalSectionRawMutex, RefCell<f64>> = Mutex::new(RefCell::new(0.0));
 
 #[esp_rtos::main]
@@ -99,25 +102,24 @@ async fn main(spawner: Spawner) -> ! {
     watchdog.enable();
     spawner.spawn(run_watchdog_monitor(watchdog)).unwrap();
 
-    let tmc = Tmc2209::new(
+    let tmc: TmcMutex = Arc::new(Mutex::new(RefCell::new(Tmc2209::new(
         peripherals.UART1,
         peripherals.GPIO13, // TX
         peripherals.GPIO10, // RX
         peripherals.GPIO9,  // STEP
         peripherals.GPIO8,  // DIR
         peripherals.GPIO7,  // ENABLE
-    );
+    ))));
     let irc = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     static mut STACK: Stack<8192> = Stack::new();
+    let tmc_ref = Arc::clone(&tmc);
     #[allow(static_mut_refs)]
     esp_rtos::start_second_core(
         peripherals.CPU_CTRL,
         irc.software_interrupt0,
         irc.software_interrupt1,
         unsafe { &mut STACK },
-        move || {
-            run_tmc(tmc);
-        },
+        || run_tmc(tmc_ref),
     );
 
     // Initialize the sensor and coordinator.
@@ -166,14 +168,14 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
     }
 }
 
-fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
+fn run_tmc(tmc: TmcMutex<'static>) -> ! {
     let delay = Delay::new();
-    tmc.enable();
-    tmc.init().unwrap();
+    tmc.lock(|x| x.borrow_mut().enable());
+    tmc.lock(|x| x.borrow_mut().init()).unwrap();
     info!("TMC2209 initialized.");
     let mut v = 0.0;
     let a = 1.0;
-    let dx = 1.0 / (tmc.pulses_per_rev() as f64);
+    let dx = 1.0 / (tmc.lock(|x| x.borrow().pulses_per_rev()) as f64);
     let dv2 = 2.0 * a * dx;
     let mut i = 0;
     loop {
@@ -201,7 +203,7 @@ fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
         }
 
         if dt < 1.0 {
-            tmc.toggle_step();
+            tmc.lock(|x| x.borrow_mut().toggle_step());
             delay.delay_micros((dt * 1e6) as u32);
         } else {
             delay.delay_millis(10);
