@@ -15,7 +15,7 @@ use crate::{
     tmc2209::Tmc2209,
     usb::PacketStream,
 };
-use core::{cell::RefCell, marker::Send};
+use core::cell::RefCell;
 use defmt::{info, Format};
 use deku::prelude::*;
 use embassy_executor::Spawner;
@@ -25,16 +25,11 @@ use esp_hal::{
     self,
     clock::CpuClock,
     delay::Delay,
-    gpio::{
-        interconnect::{PeripheralInput, PeripheralOutput},
-        OutputPin,
-    },
     interrupt::software::SoftwareInterruptControl,
-    peripherals::{CPU_CTRL, SW_INTERRUPT, TIMG0, USB_DEVICE},
+    peripherals::{TIMG0, USB_DEVICE},
     system::Stack,
     time,
     timer::timg::{MwdtStage, TimerGroup, Wdt},
-    uart::Instance,
 };
 
 use panic_rtt_target as _;
@@ -104,15 +99,25 @@ async fn main(spawner: Spawner) -> ! {
     watchdog.enable();
     spawner.spawn(run_watchdog_monitor(watchdog)).unwrap();
 
-    start_second_core(
-        peripherals.SW_INTERRUPT,
-        peripherals.CPU_CTRL,
+    let tmc = Tmc2209::new(
         peripherals.UART1,
         peripherals.GPIO13, // TX
         peripherals.GPIO10, // RX
         peripherals.GPIO9,  // STEP
         peripherals.GPIO8,  // DIR
         peripherals.GPIO7,  // ENABLE
+    );
+    let irc = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
+    static mut STACK: Stack<8192> = Stack::new();
+    #[allow(static_mut_refs)]
+    esp_rtos::start_second_core(
+        peripherals.CPU_CTRL,
+        irc.software_interrupt0,
+        irc.software_interrupt1,
+        unsafe { &mut STACK },
+        move || {
+            run_tmc(tmc);
+        },
     );
 
     // Initialize the sensor and coordinator.
@@ -159,31 +164,6 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
         watchdog.feed();
         Timer::after_millis(100).await;
     }
-}
-
-fn start_second_core(
-    interrupt: SW_INTERRUPT<'static>,
-    cpu_ctrl: CPU_CTRL,
-    uart: impl Instance + Send + 'static,
-    tx: impl PeripheralOutput<'static> + Send + 'static,
-    rx: impl PeripheralInput<'static> + Send + 'static,
-    step: impl OutputPin + 'static + Send,
-    dir: impl OutputPin + 'static + Send,
-    disable: impl OutputPin + 'static + Send,
-) {
-    let irc = SoftwareInterruptControl::new(interrupt);
-    static mut STACK: Stack<8192> = Stack::new();
-    let tmc = Tmc2209::new(uart, tx, rx, step, dir, disable);
-    #[allow(static_mut_refs)]
-    esp_rtos::start_second_core(
-        cpu_ctrl,
-        irc.software_interrupt0,
-        irc.software_interrupt1,
-        unsafe { &mut STACK },
-        move || {
-            run_tmc(tmc);
-        },
-    );
 }
 
 fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
