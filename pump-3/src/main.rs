@@ -126,10 +126,14 @@ async fn main(spawner: Spawner) -> ! {
     let mut sensor = FlowSensor::new(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO1);
     info!("Flow sensor initialized.");
     sensor.start(LiquidType::Water).await.unwrap();
-    run_coordinator(peripherals.USB_DEVICE, sensor).await;
+    run_coordinator(peripherals.USB_DEVICE, sensor, tmc).await;
 }
 
-async fn run_coordinator<'a>(device: USB_DEVICE<'a>, mut sensor: FlowSensor<'a>) -> ! {
+async fn run_coordinator<'a>(
+    device: USB_DEVICE<'a>,
+    mut sensor: FlowSensor<'a>,
+    tmc: TmcMutex<'a>,
+) -> ! {
     let mut stream = PacketStream::new(device, Duration::from_secs(1));
     loop {
         let Ok(packet) = stream.read().await else {
