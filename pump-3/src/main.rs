@@ -194,7 +194,7 @@ fn start_second_core(
 #[embassy_executor::task]
 async fn run_tmc(mut tmc: Tmc2209<'static>) -> ! {
     tmc.enable();
-    tmc.init().await.unwrap();
+    tmc.init().unwrap();
     info!("TMC2209 initialized.");
     let mut v = 0.0;
     let a = 1.0;

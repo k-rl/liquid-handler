@@ -1,16 +1,19 @@
 #![allow(dead_code)]
 
 use core::result;
+use defmt::{debug, info};
 use deku::ctx::BitSize;
 use deku::prelude::*;
+use embedded_io::{Read, ReadExactError, Write};
 use esp_hal::{
+    delay::Delay,
     gpio::{
         interconnect::{PeripheralInput, PeripheralOutput},
         Level::Low,
         Output, OutputConfig, OutputPin,
     },
-    uart::{self, Instance, Uart},
-    Async,
+    uart::{self, Instance, IoError, Uart},
+    Blocking,
 };
 use thiserror::Error;
 
@@ -565,14 +568,14 @@ pub struct PwmState {
 
 #[derive(Error, Debug)]
 pub enum Tmc2209Error {
-    #[error("UART error")]
-    UartError,
+    #[error("UART read error")]
+    UartReadError,
+    #[error("UART write error")]
+    UartWriteError,
     #[error("CRC mismatch")]
     CrcMismatch,
     #[error("Invalid response")]
     InvalidResponse,
-    #[error("Timeout")]
-    Timeout,
 }
 
 impl From<deku::DekuError> for Tmc2209Error {
@@ -581,10 +584,22 @@ impl From<deku::DekuError> for Tmc2209Error {
     }
 }
 
+impl From<ReadExactError<IoError>> for Tmc2209Error {
+    fn from(_: ReadExactError<IoError>) -> Self {
+        Tmc2209Error::UartReadError
+    }
+}
+
+impl From<IoError> for Tmc2209Error {
+    fn from(_: IoError) -> Self {
+        Tmc2209Error::UartWriteError
+    }
+}
+
 pub type Result<T> = result::Result<T, Tmc2209Error>;
 
 pub struct Tmc2209<'a> {
-    uart: Uart<'a, Async>,
+    uart: Uart<'a, Blocking>,
     step_pin: Output<'a>,
     dir_pin: Output<'a>,
     disable_pin: Output<'a>,
@@ -614,11 +629,7 @@ impl<'a> Tmc2209<'a> {
         disable: impl OutputPin + 'a,
     ) -> Self {
         let config = uart::Config::default().with_baudrate(115_200);
-        let uart = Uart::new(uart, config)
-            .unwrap()
-            .into_async()
-            .with_tx(tx)
-            .with_rx(rx);
+        let uart = Uart::new(uart, config).unwrap().with_tx(tx).with_rx(rx);
 
         let step_pin = Output::new(step, Low, OutputConfig::default());
         let dir_pin = Output::new(dir, Low, OutputConfig::default());
@@ -696,63 +707,52 @@ impl<'a> Tmc2209<'a> {
         self.disable_pin.set_high();
     }
 
-    pub async fn init(&mut self) -> Result<()> {
+    pub fn init(&mut self) -> Result<()> {
         self.write_register(
             GLOBAL_CONFIG_REG,
             FrameData::GlobalConfig(self.global_config),
-        )
-        .await?;
+        )?;
 
         self.write_register(
             RESPONSE_DELAY_REG,
             FrameData::ResponseDelay(self.resp_delay),
-        )
-        .await?;
+        )?;
 
         self.write_register(
             CURRENT_CONFIG_REG,
             FrameData::CurrentConfig(self.current_config),
-        )
-        .await?;
+        )?;
 
         self.write_register(
             POWER_DOWN_DELAY_REG,
             FrameData::PowerDownDelay(self.pwrdown_delay),
-        )
-        .await?;
+        )?;
 
-        self.write_register(PWM_THRESHOLD_REG, FrameData::PwmThreshold(self.pwm_thresh))
-            .await?;
+        self.write_register(PWM_THRESHOLD_REG, FrameData::PwmThreshold(self.pwm_thresh))?;
 
-        self.write_register(VELOCITY_REG, FrameData::Velocity(self.vel))
-            .await?;
+        self.write_register(VELOCITY_REG, FrameData::Velocity(self.vel))?;
 
         self.write_register(
             COOLSTEP_THRESHOLD_REG,
             FrameData::CoolstepThreshold(self.coolstep_thresh),
-        )
-        .await?;
+        )?;
 
         self.write_register(
             STALLGUARD_THRESHOLD_REG,
             FrameData::StallguardThreshold(self.stallguard_thresh),
-        )
-        .await?;
+        )?;
 
         self.write_register(
             COOLSTEP_CONFIG_REG,
             FrameData::CoolstepConfig(self.coolstep_config),
-        )
-        .await?;
+        )?;
 
         self.write_register(
             DRIVER_CONFIG_REG,
             FrameData::DriverConfig(self.driver_config),
-        )
-        .await?;
+        )?;
 
-        self.write_register(PWM_CONFIG_REG, FrameData::PwmConfig(self.pwm_config))
-            .await?;
+        self.write_register(PWM_CONFIG_REG, FrameData::PwmConfig(self.pwm_config))?;
 
         Ok(())
     }
@@ -1012,219 +1012,218 @@ impl<'a> Tmc2209<'a> {
     // ====Status Functions====
     // ========================
     // Global Status
-    pub async fn charge_pump_undervoltage(&mut self) -> Result<bool> {
-        if let FrameData::GlobalStatus(data) = self.read_register(GLOBAL_STATUS_REG).await? {
+    pub fn charge_pump_undervoltage(&mut self) -> Result<bool> {
+        if let FrameData::GlobalStatus(data) = self.read_register(GLOBAL_STATUS_REG)? {
             Ok(data.charge_pump_undervoltage)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn driver_error(&mut self) -> Result<bool> {
-        if let FrameData::GlobalStatus(data) = self.read_register(GLOBAL_STATUS_REG).await? {
+    pub fn driver_error(&mut self) -> Result<bool> {
+        if let FrameData::GlobalStatus(data) = self.read_register(GLOBAL_STATUS_REG)? {
             Ok(data.driver_error)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn is_reset(&mut self) -> Result<bool> {
-        if let FrameData::GlobalStatus(data) = self.read_register(GLOBAL_STATUS_REG).await? {
+    pub fn is_reset(&mut self) -> Result<bool> {
+        if let FrameData::GlobalStatus(data) = self.read_register(GLOBAL_STATUS_REG)? {
             Ok(data.reset)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn transmission_count(&mut self) -> Result<u8> {
-        if let FrameData::TransmissionCount(x) = self.read_register(TRANSMISSION_COUNT_REG).await? {
+    pub fn transmission_count(&mut self) -> Result<u8> {
+        if let FrameData::TransmissionCount(x) = self.read_register(TRANSMISSION_COUNT_REG)? {
             Ok(x)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn version(&mut self) -> Result<u8> {
-        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG).await? {
+    pub fn version(&mut self) -> Result<u8> {
+        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG)? {
             Ok(data.version)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn direction_pin(&mut self) -> Result<bool> {
-        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG).await? {
+    pub fn direction_pin(&mut self) -> Result<bool> {
+        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG)? {
             Ok(data.direction)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn disable_pwm_pin(&mut self) -> Result<bool> {
-        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG).await? {
+    pub fn disable_pwm_pin(&mut self) -> Result<bool> {
+        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG)? {
             Ok(data.disable_pwm)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
-    pub async fn step_pin(&mut self) -> Result<bool> {
-        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG).await? {
+    pub fn step_pin(&mut self) -> Result<bool> {
+        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG)? {
             Ok(data.step)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn powerdown_uart_pin(&mut self) -> Result<bool> {
-        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG).await? {
+    pub fn powerdown_uart_pin(&mut self) -> Result<bool> {
+        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG)? {
             Ok(data.powerdown_uart)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn diagnostic_pin(&mut self) -> Result<bool> {
-        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG).await? {
+    pub fn diagnostic_pin(&mut self) -> Result<bool> {
+        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG)? {
             Ok(data.diagnostic)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn microstep2_pin(&mut self) -> Result<bool> {
-        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG).await? {
+    pub fn microstep2_pin(&mut self) -> Result<bool> {
+        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG)? {
             Ok(data.microstep2)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn microstep1_pin(&mut self) -> Result<bool> {
-        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG).await? {
+    pub fn microstep1_pin(&mut self) -> Result<bool> {
+        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG)? {
             Ok(data.microstep1)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn disable_pin(&mut self) -> Result<bool> {
-        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG).await? {
+    pub fn disable_pin(&mut self) -> Result<bool> {
+        if let FrameData::PinStates(data) = self.read_register(PIN_STATES_REG)? {
             Ok(data.disable)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn microstep_time(&mut self) -> Result<u32> {
-        if let FrameData::MicrostepTime(x) = self.read_register(MICROSTEP_TIME_REG).await? {
+    pub fn microstep_time(&mut self) -> Result<u32> {
+        if let FrameData::MicrostepTime(x) = self.read_register(MICROSTEP_TIME_REG)? {
             Ok(x)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn motor_load(&mut self) -> Result<u16> {
-        if let FrameData::MotorLoad(x) = self.read_register(MOTOR_LOAD_REG).await? {
+    pub fn motor_load(&mut self) -> Result<u16> {
+        if let FrameData::MotorLoad(x) = self.read_register(MOTOR_LOAD_REG)? {
             Ok(x)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn microstep_position(&mut self) -> Result<u16> {
-        if let FrameData::MicrostepPosition(x) = self.read_register(MICROSTEP_POSITION_REG).await? {
+    pub fn microstep_position(&mut self) -> Result<u16> {
+        if let FrameData::MicrostepPosition(x) = self.read_register(MICROSTEP_POSITION_REG)? {
             Ok(x)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn microstep_current(&mut self) -> Result<(i16, i16)> {
-        if let FrameData::MicrostepCurrent(a, b) = self.read_register(MICROSTEP_CURRENT_REG).await?
-        {
+    pub fn microstep_current(&mut self) -> Result<(i16, i16)> {
+        if let FrameData::MicrostepCurrent(a, b) = self.read_register(MICROSTEP_CURRENT_REG)? {
             Ok((a, b))
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn stopped(&mut self) -> Result<bool> {
-        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG).await? {
+    pub fn stopped(&mut self) -> Result<bool> {
+        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG)? {
             Ok(data.stopped)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn pwm_mode(&mut self) -> Result<bool> {
-        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG).await? {
+    pub fn pwm_mode(&mut self) -> Result<bool> {
+        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG)? {
             Ok(data.pwm_mode)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn current_scale(&mut self) -> Result<u8> {
-        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG).await? {
+    pub fn current_scale(&mut self) -> Result<u8> {
+        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG)? {
             Ok(data.current_scale)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn temperature(&mut self) -> Result<TemperatureThreshold> {
-        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG).await? {
+    pub fn temperature(&mut self) -> Result<TemperatureThreshold> {
+        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG)? {
             Ok(data.temperature)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn open_load(&mut self) -> Result<PhaseStatus> {
-        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG).await? {
+    pub fn open_load(&mut self) -> Result<PhaseStatus> {
+        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG)? {
             Ok(data.open_load)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn low_side_short(&mut self) -> Result<PhaseStatus> {
-        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG).await? {
+    pub fn low_side_short(&mut self) -> Result<PhaseStatus> {
+        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG)? {
             Ok(data.low_side_short)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn ground_short(&mut self) -> Result<PhaseStatus> {
-        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG).await? {
+    pub fn ground_short(&mut self) -> Result<PhaseStatus> {
+        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG)? {
             Ok(data.ground_short)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn overtemperature(&mut self) -> Result<OvertemperatureStatus> {
-        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG).await? {
+    pub fn overtemperature(&mut self) -> Result<OvertemperatureStatus> {
+        if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG)? {
             Ok(data.overtemperature)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub async fn pwm_state(&mut self) -> Result<PwmState> {
+    pub fn pwm_state(&mut self) -> Result<PwmState> {
         let mut state = PwmState {
             auto_grad: 0,
             auto_offset: 0,
             scale: 0,
             offset: 0,
         };
-        let FrameData::PwmAuto(data) = self.read_register(PWM_AUTO_REG).await? else {
+        let FrameData::PwmAuto(data) = self.read_register(PWM_AUTO_REG)? else {
             return Err(Tmc2209Error::InvalidResponse);
         };
         state.auto_grad = data.gradient;
         state.auto_offset = data.offset;
-        let FrameData::PwmScale(data) = self.read_register(PWM_SCALE_REG).await? else {
+        let FrameData::PwmScale(data) = self.read_register(PWM_SCALE_REG)? else {
             return Err(Tmc2209Error::InvalidResponse);
         };
         state.scale = data.scale;
@@ -1255,9 +1254,9 @@ impl<'a> Tmc2209<'a> {
     // ===========================
     // ==== Utility Functions ====
     // ===========================
-    async fn write_register(&mut self, register: u8, data: FrameData) -> Result<()> {
+    fn write_register(&mut self, register: u8, data: FrameData) -> Result<()> {
         // Read transmission count before write
-        let count_before = self.transmission_count().await?;
+        let count_before = self.transmission_count()?;
 
         let frame = WriteFrame {
             address: self.address,
@@ -1271,26 +1270,19 @@ impl<'a> Tmc2209<'a> {
         buf[..7].copy_from_slice(&bytes[..7]);
         buf[7] = crc8(&buf[0..7]);
 
-        defmt::info!(
+        info!(
             "Writing register {:#04x}, frame: {=[u8]:#02x}",
-            register,
-            buf
+            register, buf
         );
 
-        use embedded_io_async::Write;
-        self.uart
-            .write_all(&buf)
-            .await
-            .map_err(|_| Tmc2209Error::UartError)?;
-        embassy_time::Timer::after_millis(5).await;
+        self.uart.write_all(&buf)?;
+
+        let delay = Delay::new();
+        delay.delay_millis(5);
 
         // Read back the echo since TX and RX are on the same line
         let mut echo = [0u8; 8];
-        use embedded_io_async::Read;
-        self.uart
-            .read_exact(&mut echo)
-            .await
-            .map_err(|_| Tmc2209Error::UartError)?;
+        self.uart.read_exact(&mut echo)?;
 
         // Verify echo matches what we sent
         if echo != buf {
@@ -1298,16 +1290,16 @@ impl<'a> Tmc2209<'a> {
         }
 
         // Verify transmission count incremented
-        let count_after = self.transmission_count().await?;
+        let count_after = self.transmission_count()?;
         if count_after != count_before.wrapping_add(1) {
             return Err(Tmc2209Error::InvalidResponse);
         }
 
-        embassy_time::Timer::after_millis(10).await;
+        delay.delay_millis(10);
         Ok(())
     }
 
-    async fn read_register(&mut self, register: u8) -> Result<FrameData> {
+    fn read_register(&mut self, register: u8) -> Result<FrameData> {
         // Create read request frame
         let request = ReadRequestFrame {
             address: self.address,
@@ -1320,26 +1312,18 @@ impl<'a> Tmc2209<'a> {
         request_buf[..3].copy_from_slice(&bytes[..3]);
         request_buf[3] = crc8(&request_buf[0..3]);
 
-        defmt::debug!(
+        debug!(
             "Reading register {:#04x}, request: {=[u8]:#02x}",
-            register,
-            &request_buf
+            register, &request_buf
         );
 
-        use embedded_io_async::Write;
-        self.uart
-            .write_all(&request_buf)
-            .await
-            .map_err(|_| Tmc2209Error::UartError)?;
-        embassy_time::Timer::after_millis(10).await;
+        self.uart.write_all(&request_buf)?;
+        let delay = Delay::new();
+        delay.delay_millis(10);
 
         // Read back the echo since TX and RX are on the same line
         let mut echo = [0u8; 4];
-        use embedded_io_async::Read;
-        self.uart
-            .read_exact(&mut echo)
-            .await
-            .map_err(|_| Tmc2209Error::UartError)?;
+        self.uart.read_exact(&mut echo)?;
 
         // Verify echo matches what we sent
         if echo != request_buf {
@@ -1347,16 +1331,13 @@ impl<'a> Tmc2209<'a> {
         }
 
         // Wait for response
-        embassy_time::Timer::after_millis(10).await;
+        delay.delay_millis(10);
 
         // Read response (8 bytes)
         let mut buf = [0u8; 8];
-        self.uart
-            .read_exact(&mut buf)
-            .await
-            .map_err(|_| Tmc2209Error::UartError)?;
+        self.uart.read_exact(&mut buf)?;
 
-        defmt::debug!("Read response: {=[u8]:#02x}", &buf);
+        debug!("Read response: {=[u8]:#02x}", &buf);
 
         // Verify CRC before parsing
         let received_crc = buf[7];
@@ -1379,7 +1360,7 @@ impl<'a> Tmc2209<'a> {
             0.325
         };
         let scale = libm::sqrt(2.0) * 32.0 * rms_amps * ohms / volts - 1.0;
-        defmt::info!("Current scale: {}", scale);
+        info!("Current scale: {}", scale);
         libm::round(libm::fmax(0.0, libm::fmin(31.0, scale))) as u8
     }
 }
