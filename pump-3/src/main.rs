@@ -43,8 +43,6 @@ const INIT: u8 = 0x00;
 const FLOW_SENSOR_INFO: u8 = 0x01;
 const SET_PUMP_RPM: u8 = 0x02;
 const GET_PUMP_RPM: u8 = 0x03;
-const SET_TEST_MODE: u8 = 0x04;
-const GET_TEST_MODE: u8 = 0x05;
 const SET_FILTER_STEP_PULSES: u8 = 0x06;
 const GET_FILTER_STEP_PULSES: u8 = 0x07;
 const SET_PIN_UART_MODE: u8 = 0x0A;
@@ -55,10 +53,8 @@ const SET_INVERT_DIRECTION: u8 = 0x0E;
 const GET_INVERT_DIRECTION: u8 = 0x0F;
 const SET_PWM_ENABLED: u8 = 0x10;
 const GET_PWM_ENABLED: u8 = 0x11;
-const SET_CURRENT: u8 = 0x12;
-const GET_CURRENT: u8 = 0x13;
-const SET_EXTERNAL_CURRENT_SCALING: u8 = 0x14;
-const GET_EXTERNAL_CURRENT_SCALING: u8 = 0x15;
+const SET_RMS_AMPS: u8 = 0x12;
+const GET_RMS_AMPS: u8 = 0x13;
 const SET_MICROSTEPS: u8 = 0x16;
 const GET_MICROSTEPS: u8 = 0x17;
 const FAIL: u8 = 0xFF;
@@ -77,12 +73,6 @@ enum Request {
 
     #[deku(id = "GET_PUMP_RPM")]
     GetPumpRps,
-
-    #[deku(id = "SET_TEST_MODE")]
-    SetTestMode(bool),
-
-    #[deku(id = "GET_TEST_MODE")]
-    GetTestMode,
 
     #[deku(id = "SET_FILTER_STEP_PULSES")]
     SetFilterStepPulses(bool),
@@ -114,22 +104,16 @@ enum Request {
     #[deku(id = "SET_PWM_ENABLED")]
     SetPwmEnabled(bool),
 
-    #[deku(id = "GET_CURRENT")]
-    GetCurrent,
+    #[deku(id = "GET_RMS_AMPS")]
+    GetRmsAmps,
 
-    #[deku(id = "SET_CURRENT")]
-    SetCurrent {
+    #[deku(id = "SET_RMS_AMPS")]
+    SetRmsAmps {
         running_rms_amps: f64,
         stopped_rms_amps: f64,
         ref_volts: f64,
         sense_ohms: f64,
     },
-
-    #[deku(id = "SET_EXTERNAL_CURRENT_SCALING")]
-    SetExternalCurrentScaling(bool),
-
-    #[deku(id = "GET_EXTERNAL_CURRENT_SCALING")]
-    GetExternalCurrentScaling,
 
     #[deku(id = "GET_MICROSTEPS")]
     GetMicrosteps,
@@ -152,12 +136,6 @@ enum Response {
 
     #[deku(id = "GET_PUMP_RPM")]
     GetPumpRps(f64),
-
-    #[deku(id = "SET_TEST_MODE")]
-    SetTestMode,
-
-    #[deku(id = "GET_TEST_MODE")]
-    GetTestMode(bool),
 
     #[deku(id = "SET_FILTER_STEP_PULSES")]
     SetFilterStepPulses,
@@ -189,17 +167,11 @@ enum Response {
     #[deku(id = "GET_PWM_ENABLED")]
     GetPwmEnabled(bool),
 
-    #[deku(id = "SET_CURRENT")]
-    SetCurrent,
+    #[deku(id = "SET_RMS_AMPS")]
+    SetRmsAmps,
 
-    #[deku(id = "GET_CURRENT")]
-    GetCurrent(f64, f64),
-
-    #[deku(id = "SET_EXTERNAL_CURRENT_SCALING")]
-    SetExternalCurrentScaling,
-
-    #[deku(id = "GET_EXTERNAL_CURRENT_SCALING")]
-    GetExternalCurrentScaling(bool),
+    #[deku(id = "GET_RMS_AMPS")]
+    GetRmsAmps(f64, f64),
 
     #[deku(id = "GET_MICROSTEPS")]
     GetMicrosteps(u16),
@@ -256,14 +228,17 @@ async fn main(spawner: Spawner) -> ! {
     watchdog.enable();
     spawner.spawn(run_watchdog_monitor(watchdog)).unwrap();
 
-    let tmc: TmcMutex = Arc::new(Mutex::new(RefCell::new(Tmc2209::new(
-        peripherals.UART1,
-        peripherals.GPIO13, // TX
-        peripherals.GPIO10, // RX
-        peripherals.GPIO9,  // STEP
-        peripherals.GPIO8,  // DIR
-        peripherals.GPIO7,  // ENABLE
-    ))));
+    let tmc: TmcMutex = Arc::new(Mutex::new(RefCell::new(
+        Tmc2209::new(
+            peripherals.UART1,
+            peripherals.GPIO13, // TX
+            peripherals.GPIO10, // RX
+            peripherals.GPIO9,  // STEP
+            peripherals.GPIO8,  // DIR
+            peripherals.GPIO7,  // ENABLE
+        )
+        .unwrap(),
+    )));
     let irc = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     static mut STACK: Stack<8192> = Stack::new();
     let tmc_ref = Arc::clone(&tmc);
@@ -325,11 +300,6 @@ async fn handle_request<'a>(
             Response::SetPumpRps
         }
         Request::GetPumpRps => Response::GetPumpRps(RPM.lock(|x| *x.borrow())),
-        Request::GetTestMode => Response::GetTestMode(tmc.lock(|x| x.borrow_mut().test_mode())?),
-        Request::SetTestMode(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_test_mode(enable))?;
-            Response::SetTestMode
-        }
         Request::GetFilterStepPulses => {
             Response::GetFilterStepPulses(tmc.lock(|x| x.borrow_mut().filter_step_pulses())?)
         }
@@ -365,32 +335,25 @@ async fn handle_request<'a>(
             tmc.lock(|x| x.borrow_mut().set_pwm_enabled(enable))?;
             Response::SetPwmEnabled
         }
-        Request::GetCurrent => {
-            let (run, stop) = tmc.lock(|x| x.borrow_mut().current());
-            Response::GetCurrent(run, stop)
+        Request::GetRmsAmps => {
+            let (run, stop) = tmc.lock(|x| x.borrow_mut().rms_amps());
+            Response::GetRmsAmps(run, stop)
         }
-        Request::SetCurrent {
+        Request::SetRmsAmps {
             running_rms_amps,
             stopped_rms_amps,
             ref_volts,
             sense_ohms,
         } => {
             tmc.lock(|x| {
-                x.borrow_mut().set_current(
+                x.borrow_mut().set_rms_amps(
                     running_rms_amps,
                     stopped_rms_amps,
                     ref_volts,
                     sense_ohms,
                 )
             })?;
-            Response::SetCurrent
-        }
-        Request::GetExternalCurrentScaling => Response::GetExternalCurrentScaling(
-            tmc.lock(|x| x.borrow_mut().external_current_scaling())?,
-        ),
-        Request::SetExternalCurrentScaling(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_external_current_scaling(enable))?;
-            Response::SetExternalCurrentScaling
+            Response::SetRmsAmps
         }
         Request::GetMicrosteps => {
             Response::GetMicrosteps(tmc.lock(|x| x.borrow_mut().microsteps())?)

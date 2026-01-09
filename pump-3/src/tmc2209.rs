@@ -28,7 +28,7 @@ const PIN_STATES_REG: u8 = 0x06;
 const FACTORY_CONFIG_REG: u8 = 0x07;
 // Velocity dependent control.
 const CURRENT_CONFIG_REG: u8 = 0x10;
-const POWER_DOWN_DELAY_REG: u8 = 0x11;
+const POWERDOWN_DELAY_REG: u8 = 0x11;
 const MICROSTEP_TIME_REG: u8 = 0x12;
 const PWM_THRESHOLD_REG: u8 = 0x13;
 const VELOCITY_REG: u8 = 0x22;
@@ -121,7 +121,7 @@ enum FrameData {
     #[deku(id = "CURRENT_CONFIG_REG")]
     CurrentConfig(CurrentConfig),
 
-    #[deku(id = "POWER_DOWN_DELAY_REG")]
+    #[deku(id = "POWERDOWN_DELAY_REG")]
     PowerDownDelay(#[deku(pad_bits_before = "24")] u8),
 
     #[deku(id = "MICROSTEP_TIME_REG")]
@@ -309,7 +309,7 @@ struct FactoryConfig {
 struct CurrentConfig {
     #[deku(pad_bits_before = "12")]
     #[deku(bits = 4)]
-    powerdown_time: u8,
+    powerdown_duration: u8,
     #[deku(pad_bits_before = "3")]
     #[deku(bits = 5)]
     running_scale: u8,
@@ -641,6 +641,7 @@ pub struct Tmc2209<'a> {
     steps_per_rev: u32,
     running_rms_amps: f64,
     stopped_rms_amps: f64,
+    clock_hz: u64,
 }
 
 impl<'a> Tmc2209<'a> {
@@ -651,7 +652,7 @@ impl<'a> Tmc2209<'a> {
         step: impl OutputPin + 'a,
         dir: impl OutputPin + 'a,
         disable: impl OutputPin + 'a,
-    ) -> Self {
+    ) -> Result<Self> {
         let config = uart::Config::default().with_baudrate(115_200);
         let uart = Uart::new(uart, config).unwrap().with_tx(tx).with_rx(rx);
 
@@ -668,6 +669,7 @@ impl<'a> Tmc2209<'a> {
             steps_per_rev: 200,
             running_rms_amps: f64::NAN,
             stopped_rms_amps: f64::NAN,
+            clock_hz: 12e10 as u64,
             /*
             global_config: GlobalConfig {
                 test_mode: false,
@@ -723,7 +725,11 @@ impl<'a> Tmc2209<'a> {
             */
         };
         // tmc.set_running_amps(0.150).unwrap();
-        tmc
+        let mut config = tmc.global_config()?;
+        config.test_mode = false;
+        config.pin_uart_mode = true;
+        tmc.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
+        Ok(tmc)
     }
 
     pub fn enable(&mut self) {
@@ -738,6 +744,14 @@ impl<'a> Tmc2209<'a> {
     // ====Configuration options====
     // =============================
 
+    pub fn clock_hz(&self) -> u64 {
+        self.clock_hz
+    }
+
+    pub fn set_clock_hz(&mut self, hz: u64) {
+        self.clock_hz = hz;
+    }
+
     // Global Configs
     pub fn steps_per_rev(&self) -> u32 {
         self.steps_per_rev
@@ -745,17 +759,6 @@ impl<'a> Tmc2209<'a> {
 
     pub fn set_steps_per_rev(&mut self, steps: u32) {
         self.steps_per_rev = steps;
-    }
-
-    pub fn test_mode(&mut self) -> Result<bool> {
-        Ok(self.global_config()?.test_mode)
-    }
-
-    pub fn set_test_mode(&mut self, enable: bool) -> Result<()> {
-        let mut config = self.global_config()?;
-        config.test_mode = enable;
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
-        Ok(())
     }
 
     pub fn filter_step_pulses(&mut self) -> Result<bool> {
@@ -813,17 +816,6 @@ impl<'a> Tmc2209<'a> {
         Ok(())
     }
 
-    pub fn external_current_scaling(&mut self) -> Result<bool> {
-        Ok(self.global_config()?.external_current_scaling)
-    }
-
-    pub fn set_external_current_scaling(&mut self, enable: bool) -> Result<()> {
-        let mut config = self.global_config()?;
-        config.external_current_scaling = enable;
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
-        Ok(())
-    }
-
     pub fn response_delay(&mut self) -> Result<u8> {
         if let FrameData::ResponseDelay(delay) = self.read_register(RESPONSE_DELAY_REG)? {
             Ok(delay)
@@ -841,11 +833,11 @@ impl<'a> Tmc2209<'a> {
         Ok(())
     }
 
-    pub fn current(&mut self) -> (f64, f64) {
+    pub fn rms_amps(&mut self) -> (f64, f64) {
         (self.running_rms_amps, self.stopped_rms_amps)
     }
 
-    pub fn set_current(
+    pub fn set_rms_amps(
         &mut self,
         running_rms_amps: f64,
         stopped_rms_amps: f64,
@@ -891,28 +883,41 @@ impl<'a> Tmc2209<'a> {
         self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))
     }
 
-    pub fn powerdown_time(&mut self) -> Result<u8> {
-        Ok(self.current_config()?.powerdown_time)
+    pub fn stop_mode(&mut self) -> Result<FreewheelMode> {
+        Ok(self.pwm_config()?.freewheel_mode)
     }
 
-    pub fn set_powerdown_time(&mut self, time: u8) -> Result<()> {
-        let mut config = self.current_config()?;
-        config.powerdown_time = time;
-        self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(config))?;
+    pub fn set_stop_mode(&mut self, mode: FreewheelMode) -> Result<()> {
+        let mut config = self.pwm_config()?;
+        config.freewheel_mode = mode;
+        self.write_register(PWM_CONFIG_REG, FrameData::PwmConfig(config))?;
         Ok(())
     }
 
-    pub fn powerdown_delay(&mut self) -> Result<u8> {
-        if let FrameData::PowerDownDelay(delay) = self.read_register(POWER_DOWN_DELAY_REG)? {
-            Ok(delay)
+    pub fn powerdown_duration_s(&mut self) -> Result<f64> {
+        let config = self.current_config()?;
+        Ok(config.powerdown_duration as f64 * (1 << 18) as f64 / self.clock_hz as f64)
+    }
+
+    pub fn set_powerdown_duration_s(&mut self, duration: f64) -> Result<()> {
+        let mut config = self.current_config()?;
+        let scale = self.clock_hz as f64 / (1 << 18) as f64;
+        config.powerdown_duration = libm::round(scale * duration) as u8;
+        self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(config))
+    }
+
+    pub fn powerdown_delay_s(&mut self) -> Result<f64> {
+        if let FrameData::PowerDownDelay(delay) = self.read_register(POWERDOWN_DELAY_REG)? {
+            Ok(delay as f64 * (1 << 18) as f64 / self.clock_hz as f64)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
-    pub fn set_powerdown_delay(&mut self, delay: u8) -> Result<()> {
-        self.write_register(POWER_DOWN_DELAY_REG, FrameData::PowerDownDelay(delay))?;
-        Ok(())
+    pub fn set_powerdown_delay_s(&mut self, delay: f64) -> Result<()> {
+        let scale = self.clock_hz as f64 / (1 << 18) as f64;
+        let delay = libm::round(scale * delay).clamp(0.0, 15.0) as u8;
+        self.write_register(POWERDOWN_DELAY_REG, FrameData::PowerDownDelay(delay))
     }
 
     pub fn pwm_threshold(&mut self) -> Result<u32> {
@@ -1183,17 +1188,6 @@ impl<'a> Tmc2209<'a> {
         );
         let mut config = self.pwm_config()?;
         config.max_amplitude_change = change;
-        self.write_register(PWM_CONFIG_REG, FrameData::PwmConfig(config))?;
-        Ok(())
-    }
-
-    pub fn freewheel_mode(&mut self) -> Result<FreewheelMode> {
-        Ok(self.pwm_config()?.freewheel_mode)
-    }
-
-    pub fn set_freewheel_mode(&mut self, mode: FreewheelMode) -> Result<()> {
-        let mut config = self.pwm_config()?;
-        config.freewheel_mode = mode;
         self.write_register(PWM_CONFIG_REG, FrameData::PwmConfig(config))?;
         Ok(())
     }
