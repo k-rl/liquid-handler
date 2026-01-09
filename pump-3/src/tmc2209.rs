@@ -312,10 +312,10 @@ struct CurrentConfig {
     powerdown_time: u8,
     #[deku(pad_bits_before = "3")]
     #[deku(bits = 5)]
-    running_current_scale: u8,
+    running_scale: u8,
     #[deku(pad_bits_before = "3")]
     #[deku(bits = 5)]
-    stopped_current_scale: u8,
+    stopped_scale: u8,
 }
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite)]
@@ -638,8 +638,9 @@ pub struct Tmc2209<'a> {
     dir_pin: Output<'a>,
     disable_pin: Output<'a>,
     address: u8,
-    sense_ohms: f64,
     steps_per_rev: u32,
+    running_rms_amps: f64,
+    stopped_rms_amps: f64,
 }
 
 impl<'a> Tmc2209<'a> {
@@ -664,8 +665,9 @@ impl<'a> Tmc2209<'a> {
             dir_pin,
             disable_pin,
             address: 0,
-            sense_ohms: 0.110,
             steps_per_rev: 200,
+            running_rms_amps: f64::NAN,
+            stopped_rms_amps: f64::NAN,
             /*
             global_config: GlobalConfig {
                 test_mode: false,
@@ -720,7 +722,7 @@ impl<'a> Tmc2209<'a> {
             },
             */
         };
-        tmc.set_running_amps(0.150).unwrap();
+        // tmc.set_running_amps(0.150).unwrap();
         tmc
     }
 
@@ -743,27 +745,6 @@ impl<'a> Tmc2209<'a> {
 
     pub fn set_steps_per_rev(&mut self, steps: u32) {
         self.steps_per_rev = steps;
-    }
-
-    pub fn sense_ohms(&mut self) -> Result<f64> {
-        if self.global_config()?.internal_sense_resistor {
-            Ok(0.170)
-        } else {
-            Ok(self.sense_ohms)
-        }
-    }
-
-    pub fn set_sense_ohms(&mut self, ohms: f64) -> Result<()> {
-        let mut config = self.global_config()?;
-        if ohms <= 0.0 {
-            config.internal_sense_resistor = true;
-        } else {
-            config.internal_sense_resistor = false;
-            self.sense_ohms = ohms;
-        }
-
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
-        Ok(())
     }
 
     pub fn test_mode(&mut self) -> Result<bool> {
@@ -860,29 +841,53 @@ impl<'a> Tmc2209<'a> {
         Ok(())
     }
 
-    // Current Configs
-    pub fn stopped_amps(&mut self) -> Result<f64> {
-        let config = self.current_config()?;
-        Ok(self.current_scale_to_amps(config.stopped_current_scale)?)
+    pub fn current(&mut self) -> (f64, f64) {
+        (self.running_rms_amps, self.stopped_rms_amps)
     }
 
-    pub fn set_stopped_amps(&mut self, rms_amps: f64) -> Result<()> {
-        let mut config = self.current_config()?;
-        config.stopped_current_scale = self.get_current_scale(rms_amps)?;
-        self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(config))?;
-        Ok(())
-    }
+    pub fn set_current(
+        &mut self,
+        running_rms_amps: f64,
+        stopped_rms_amps: f64,
+        ref_volts: f64,
+        sense_ohms: f64,
+        low_sense_volts: bool,
+    ) -> Result<()> {
+        let mut global_config = self.global_config()?;
+        let sense_ohms = if sense_ohms <= 0.0 {
+            global_config.internal_sense_resistor = true;
+            0.170
+        } else {
+            global_config.internal_sense_resistor = false;
+            sense_ohms
+        };
+        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
 
-    pub fn running_amps(&mut self) -> Result<f64> {
-        let config = self.current_config()?;
-        Ok(self.current_scale_to_amps(config.running_current_scale)?)
-    }
+        let mut driver_config = self.driver_config()?;
+        let sense_volts = if low_sense_volts {
+            driver_config.low_sense_resistor_voltage = true;
+            0.180
+        } else {
+            driver_config.low_sense_resistor_voltage = false;
+            0.325
+        };
+        self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
 
-    pub fn set_running_amps(&mut self, rms_amps: f64) -> Result<()> {
-        let mut config = self.current_config()?;
-        config.running_current_scale = self.get_current_scale(rms_amps)?;
-        self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(config))?;
-        Ok(())
+        let scale = if ref_volts <= 0.0 {
+            sense_volts / (32.0 * 1.4142 * (sense_ohms + 0.02))
+        } else {
+            sense_volts * ref_volts / (32.0 * 2.5 * 1.4142 * (sense_ohms + 0.02))
+        };
+
+        let running_scale = libm::round(running_rms_amps / scale - 1.0).clamp(0.0, 31.0) as u8;
+        let stopped_scale = libm::round(stopped_rms_amps / scale - 1.0).clamp(0.0, 31.0) as u8;
+        self.running_rms_amps = (running_scale as f64 + 1.0) * scale;
+        self.stopped_rms_amps = (stopped_scale as f64 + 1.0) * scale;
+
+        let mut current_config = self.current_config()?;
+        current_config.running_scale = running_scale;
+        current_config.stopped_scale = stopped_scale;
+        self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))
     }
 
     pub fn powerdown_time(&mut self) -> Result<u8> {
@@ -1091,17 +1096,6 @@ impl<'a> Tmc2209<'a> {
             self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
         }
         self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
-        Ok(())
-    }
-
-    pub fn low_sense_resistor_voltage(&mut self) -> Result<bool> {
-        Ok(self.driver_config()?.low_sense_resistor_voltage)
-    }
-
-    pub fn set_low_sense_resistor_voltage(&mut self, enable: bool) -> Result<()> {
-        let mut config = self.driver_config()?;
-        config.low_sense_resistor_voltage = enable;
-        self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(config))?;
         Ok(())
     }
 
@@ -1628,28 +1622,6 @@ impl<'a> Tmc2209<'a> {
         let (_rest, response) = ReadResponseFrame::from_bytes((&buf, 0))?;
 
         Ok(response.data)
-    }
-
-    fn get_current_scale(&mut self, rms_amps: f64) -> Result<u8> {
-        let ohms = self.sense_ohms + 0.02;
-        let volts = if self.low_sense_resistor_voltage()? {
-            0.180
-        } else {
-            0.325
-        };
-        let scale = libm::sqrt(2.0) * 32.0 * rms_amps * ohms / volts - 1.0;
-        info!("Current scale: {}", scale);
-        Ok(libm::round(libm::fmax(0.0, libm::fmin(31.0, scale))) as u8)
-    }
-
-    fn current_scale_to_amps(&mut self, scale: u8) -> Result<f64> {
-        let ohms = self.sense_ohms + 0.02;
-        let volts = if self.low_sense_resistor_voltage()? {
-            0.180
-        } else {
-            0.325
-        };
-        Ok(((scale as f64) + 1.0) * volts / (libm::sqrt(2.0) * 32.0 * ohms))
     }
 }
 

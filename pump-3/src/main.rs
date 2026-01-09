@@ -55,8 +55,8 @@ const SET_INVERT_DIRECTION: u8 = 0x0E;
 const GET_INVERT_DIRECTION: u8 = 0x0F;
 const SET_PWM_ENABLED: u8 = 0x10;
 const GET_PWM_ENABLED: u8 = 0x11;
-const SET_SENSE_OHMS: u8 = 0x12;
-const GET_SENSE_OHMS: u8 = 0x13;
+const SET_CURRENT: u8 = 0x12;
+const GET_CURRENT: u8 = 0x13;
 const SET_EXTERNAL_CURRENT_SCALING: u8 = 0x14;
 const GET_EXTERNAL_CURRENT_SCALING: u8 = 0x15;
 const SET_MICROSTEPS: u8 = 0x16;
@@ -108,17 +108,23 @@ enum Request {
     #[deku(id = "GET_INVERT_DIRECTION")]
     GetInvertDirection,
 
-    #[deku(id = "SET_PWM_ENABLED")]
-    SetPwmEnabled(bool),
-
     #[deku(id = "GET_PWM_ENABLED")]
     GetPwmEnabled,
 
-    #[deku(id = "SET_SENSE_OHMS")]
-    SetSenseOhms(f64),
+    #[deku(id = "SET_PWM_ENABLED")]
+    SetPwmEnabled(bool),
 
-    #[deku(id = "GET_SENSE_OHMS")]
-    GetSenseOhms,
+    #[deku(id = "GET_CURRENT")]
+    GetCurrent,
+
+    #[deku(id = "SET_CURRENT")]
+    SetCurrent {
+        running_rms_amps: f64,
+        stopped_rms_amps: f64,
+        ref_volts: f64,
+        sense_ohms: f64,
+        low_sense_volts: bool,
+    },
 
     #[deku(id = "SET_EXTERNAL_CURRENT_SCALING")]
     SetExternalCurrentScaling(bool),
@@ -184,11 +190,11 @@ enum Response {
     #[deku(id = "GET_PWM_ENABLED")]
     GetPwmEnabled(bool),
 
-    #[deku(id = "SET_SENSE_OHMS")]
-    SetSenseOhms,
+    #[deku(id = "SET_CURRENT")]
+    SetCurrent,
 
-    #[deku(id = "GET_SENSE_OHMS")]
-    GetSenseOhms(f64),
+    #[deku(id = "GET_CURRENT")]
+    GetCurrent(f64, f64),
 
     #[deku(id = "SET_EXTERNAL_CURRENT_SCALING")]
     SetExternalCurrentScaling,
@@ -360,10 +366,27 @@ async fn handle_request<'a>(
             tmc.lock(|x| x.borrow_mut().set_pwm_enabled(enable))?;
             Response::SetPwmEnabled
         }
-        Request::GetSenseOhms => Response::GetSenseOhms(tmc.lock(|x| x.borrow_mut().sense_ohms())?),
-        Request::SetSenseOhms(ohms) => {
-            tmc.lock(|x| x.borrow_mut().set_sense_ohms(ohms))?;
-            Response::SetSenseOhms
+        Request::GetCurrent => {
+            let (run, stop) = tmc.lock(|x| x.borrow_mut().current());
+            Response::GetCurrent(run, stop)
+        }
+        Request::SetCurrent {
+            running_rms_amps,
+            stopped_rms_amps,
+            ref_volts,
+            sense_ohms,
+            low_sense_volts,
+        } => {
+            tmc.lock(|x| {
+                x.borrow_mut().set_current(
+                    running_rms_amps,
+                    stopped_rms_amps,
+                    ref_volts,
+                    sense_ohms,
+                    low_sense_volts,
+                )
+            })?;
+            Response::SetCurrent
         }
         Request::GetExternalCurrentScaling => Response::GetExternalCurrentScaling(
             tmc.lock(|x| x.borrow_mut().external_current_scaling())?,
