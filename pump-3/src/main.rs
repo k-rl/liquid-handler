@@ -55,8 +55,8 @@ const SET_INVERT_DIRECTION: u8 = 0x0E;
 const GET_INVERT_DIRECTION: u8 = 0x0F;
 const SET_PWM_ENABLED: u8 = 0x10;
 const GET_PWM_ENABLED: u8 = 0x11;
-const SET_INTERNAL_SENSE_RESISTOR: u8 = 0x12;
-const GET_INTERNAL_SENSE_RESISTOR: u8 = 0x13;
+const SET_SENSE_OHMS: u8 = 0x12;
+const GET_SENSE_OHMS: u8 = 0x13;
 const SET_EXTERNAL_CURRENT_SCALING: u8 = 0x14;
 const GET_EXTERNAL_CURRENT_SCALING: u8 = 0x15;
 const SET_MICROSTEPS: u8 = 0x16;
@@ -114,11 +114,11 @@ enum Request {
     #[deku(id = "GET_PWM_ENABLED")]
     GetPwmEnabled,
 
-    #[deku(id = "SET_INTERNAL_SENSE_RESISTOR")]
-    SetInternalSenseResistor(bool),
+    #[deku(id = "SET_SENSE_OHMS")]
+    SetSenseOhms(f64),
 
-    #[deku(id = "GET_INTERNAL_SENSE_RESISTOR")]
-    GetInternalSenseResistor,
+    #[deku(id = "GET_SENSE_OHMS")]
+    GetSenseOhms,
 
     #[deku(id = "SET_EXTERNAL_CURRENT_SCALING")]
     SetExternalCurrentScaling(bool),
@@ -184,11 +184,11 @@ enum Response {
     #[deku(id = "GET_PWM_ENABLED")]
     GetPwmEnabled(bool),
 
-    #[deku(id = "SET_INTERNAL_SENSE_RESISTOR")]
-    SetInternalSenseResistor,
+    #[deku(id = "SET_SENSE_OHMS")]
+    SetSenseOhms,
 
-    #[deku(id = "GET_INTERNAL_SENSE_RESISTOR")]
-    GetInternalSenseResistor(bool),
+    #[deku(id = "GET_SENSE_OHMS")]
+    GetSenseOhms(f64),
 
     #[deku(id = "SET_EXTERNAL_CURRENT_SCALING")]
     SetExternalCurrentScaling,
@@ -221,7 +221,7 @@ impl From<tmc2209::Tmc2209Error> for HandleRequestError {
 }
 
 impl From<flow_sensor::FlowSensorError> for HandleRequestError {
-    fn from(err: flow_sensor::FlowSensorError) -> Self {
+    fn from(_: flow_sensor::FlowSensorError) -> Self {
         HandleRequestError::FlowSensorError
     }
 }
@@ -360,12 +360,10 @@ async fn handle_request<'a>(
             tmc.lock(|x| x.borrow_mut().set_pwm_enabled(enable))?;
             Response::SetPwmEnabled
         }
-        Request::GetInternalSenseResistor => Response::GetInternalSenseResistor(
-            tmc.lock(|x| x.borrow_mut().internal_sense_resistor())?,
-        ),
-        Request::SetInternalSenseResistor(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_internal_sense_resistor(enable))?;
-            Response::SetInternalSenseResistor
+        Request::GetSenseOhms => Response::GetSenseOhms(tmc.lock(|x| x.borrow_mut().sense_ohms())?),
+        Request::SetSenseOhms(ohms) => {
+            tmc.lock(|x| x.borrow_mut().set_sense_ohms(ohms))?;
+            Response::SetSenseOhms
         }
         Request::GetExternalCurrentScaling => Response::GetExternalCurrentScaling(
             tmc.lock(|x| x.borrow_mut().external_current_scaling())?,

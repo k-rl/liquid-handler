@@ -745,6 +745,27 @@ impl<'a> Tmc2209<'a> {
         self.steps_per_rev = steps;
     }
 
+    pub fn sense_ohms(&mut self) -> Result<f64> {
+        if self.global_config()?.internal_sense_resistor {
+            Ok(0.170)
+        } else {
+            Ok(self.sense_ohms)
+        }
+    }
+
+    pub fn set_sense_ohms(&mut self, ohms: f64) -> Result<()> {
+        let mut config = self.global_config()?;
+        if ohms <= 0.0 {
+            config.internal_sense_resistor = true;
+        } else {
+            config.internal_sense_resistor = false;
+            self.sense_ohms = ohms;
+        }
+
+        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
+        Ok(())
+    }
+
     pub fn test_mode(&mut self) -> Result<bool> {
         Ok(self.global_config()?.test_mode)
     }
@@ -807,17 +828,6 @@ impl<'a> Tmc2209<'a> {
     pub fn set_pwm_enabled(&mut self, enable: bool) -> Result<()> {
         let mut config = self.global_config()?;
         config.disable_pwm = !enable;
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
-        Ok(())
-    }
-
-    pub fn internal_sense_resistor(&mut self) -> Result<bool> {
-        Ok(self.global_config()?.internal_sense_resistor)
-    }
-
-    pub fn set_internal_sense_resistor(&mut self, enable: bool) -> Result<()> {
-        let mut config = self.global_config()?;
-        config.internal_sense_resistor = enable;
         self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
         Ok(())
     }
