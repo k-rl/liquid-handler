@@ -123,7 +123,6 @@ enum Request {
         stopped_rms_amps: f64,
         ref_volts: f64,
         sense_ohms: f64,
-        low_sense_volts: bool,
     },
 
     #[deku(id = "SET_EXTERNAL_CURRENT_SCALING")]
@@ -375,7 +374,6 @@ async fn handle_request<'a>(
             stopped_rms_amps,
             ref_volts,
             sense_ohms,
-            low_sense_volts,
         } => {
             tmc.lock(|x| {
                 x.borrow_mut().set_current(
@@ -383,7 +381,6 @@ async fn handle_request<'a>(
                     stopped_rms_amps,
                     ref_volts,
                     sense_ohms,
-                    low_sense_volts,
                 )
             })?;
             Response::SetCurrent

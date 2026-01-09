@@ -851,7 +851,6 @@ impl<'a> Tmc2209<'a> {
         stopped_rms_amps: f64,
         ref_volts: f64,
         sense_ohms: f64,
-        low_sense_volts: bool,
     ) -> Result<()> {
         let mut global_config = self.global_config()?;
         let sense_ohms = if sense_ohms <= 0.0 {
@@ -861,23 +860,25 @@ impl<'a> Tmc2209<'a> {
             global_config.internal_sense_resistor = false;
             sense_ohms
         };
+
+        let mut scale = 1.0 / (32.0 * 1.4142 * (sense_ohms + 0.02));
+        if ref_volts <= 0.0 {
+            global_config.external_current_scaling = false;
+        } else {
+            global_config.external_current_scaling = true;
+            scale *= ref_volts / 2.5
+        }
         self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
 
         let mut driver_config = self.driver_config()?;
-        let sense_volts = if low_sense_volts {
-            driver_config.low_sense_resistor_voltage = true;
-            0.180
-        } else {
+        if libm::fmax(running_rms_amps, stopped_rms_amps) / (scale * 0.18) > 32.0 {
             driver_config.low_sense_resistor_voltage = false;
-            0.325
-        };
-        self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
-
-        let scale = if ref_volts <= 0.0 {
-            sense_volts / (32.0 * 1.4142 * (sense_ohms + 0.02))
+            scale *= 0.325;
         } else {
-            sense_volts * ref_volts / (32.0 * 2.5 * 1.4142 * (sense_ohms + 0.02))
-        };
+            driver_config.low_sense_resistor_voltage = true;
+            scale *= 0.180;
+        }
+        self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
 
         let running_scale = libm::round(running_rms_amps / scale - 1.0).clamp(0.0, 31.0) as u8;
         let stopped_scale = libm::round(stopped_rms_amps / scale - 1.0).clamp(0.0, 31.0) as u8;
