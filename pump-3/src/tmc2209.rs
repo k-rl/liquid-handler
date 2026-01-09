@@ -393,17 +393,11 @@ pub enum MicrostepResolution {
     M128,
     #[deku(id = 0b0000)]
     M256,
-    #[deku(id = 0b1111)]
-    PinSet,
 }
 
 impl From<u16> for MicrostepResolution {
     fn from(mut x: u16) -> Self {
-        x = x.clamp(0, 256);
-        if x == 0 {
-            return MicrostepResolution::PinSet;
-        }
-
+        x = x.clamp(1, 256);
         match x.ilog2() {
             0 => MicrostepResolution::M1,
             1 => MicrostepResolution::M2,
@@ -431,7 +425,6 @@ impl From<MicrostepResolution> for u16 {
             MicrostepResolution::M64 => 64,
             MicrostepResolution::M128 => 128,
             MicrostepResolution::M256 => 256,
-            MicrostepResolution::PinSet => 0,
         }
     }
 }
@@ -1487,7 +1480,6 @@ impl<'a> Tmc2209<'a> {
 
     pub fn pulses_per_rev(&mut self) -> Result<u32> {
         let msteps_per_step = u16::from(self.microsteps()?) as u32;
-        assert_ne!(msteps_per_step, 0);
         let pulses_per_mstep = if self.double_edge_step()? { 1 } else { 2 };
         Ok(pulses_per_mstep * msteps_per_step * self.steps_per_rev)
     }
