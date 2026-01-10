@@ -753,25 +753,6 @@ impl<'a> Tmc2209<'a> {
     }
 
     // Global Configs
-    pub fn steps_per_rev(&self) -> u32 {
-        self.steps_per_rev
-    }
-
-    pub fn set_steps_per_rev(&mut self, steps: u32) {
-        self.steps_per_rev = steps;
-    }
-
-    pub fn filter_step_pulses(&mut self) -> Result<bool> {
-        Ok(self.global_config()?.filter_step_pulses)
-    }
-
-    pub fn set_filter_step_pulses(&mut self, enable: bool) -> Result<()> {
-        let mut config = self.global_config()?;
-        config.filter_step_pulses = enable;
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
-        Ok(())
-    }
-
     pub fn pin_uart_mode(&mut self) -> Result<bool> {
         Ok(self.global_config()?.pin_uart_mode)
     }
@@ -801,17 +782,6 @@ impl<'a> Tmc2209<'a> {
     pub fn set_invert_direction(&mut self, enable: bool) -> Result<()> {
         let mut config = self.global_config()?;
         config.invert_direction = enable;
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
-        Ok(())
-    }
-
-    pub fn pwm_enabled(&mut self) -> Result<bool> {
-        Ok(!self.global_config()?.disable_pwm)
-    }
-
-    pub fn set_pwm_enabled(&mut self, enable: bool) -> Result<()> {
-        let mut config = self.global_config()?;
-        config.disable_pwm = !enable;
         self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
         Ok(())
     }
@@ -920,19 +890,6 @@ impl<'a> Tmc2209<'a> {
         self.write_register(POWERDOWN_DELAY_REG, FrameData::PowerDownDelay(delay))
     }
 
-    pub fn pwm_threshold(&mut self) -> Result<u32> {
-        if let FrameData::PwmThreshold(threshold) = self.read_register(PWM_THRESHOLD_REG)? {
-            Ok(threshold)
-        } else {
-            Err(Tmc2209Error::InvalidResponse)
-        }
-    }
-
-    pub fn set_pwm_threshold(&mut self, threshold: u32) -> Result<()> {
-        self.write_register(PWM_THRESHOLD_REG, FrameData::PwmThreshold(threshold))?;
-        Ok(())
-    }
-
     pub fn velocity(&mut self) -> Result<f64> {
         let velocity = if let FrameData::Velocity(value) = self.read_register(VELOCITY_REG)? {
             value
@@ -947,6 +904,66 @@ impl<'a> Tmc2209<'a> {
         let pps = (self.pulses_per_rev()? as f64) * rpm / 60.0;
         let velocity = (pps / 0.715) as i32;
         self.write_register(VELOCITY_REG, FrameData::Velocity(velocity))?;
+        Ok(())
+    }
+
+    // Step config
+    pub fn microsteps(&mut self) -> Result<u16> {
+        Ok(self.driver_config()?.microstep_resolution.into())
+    }
+
+    pub fn set_microsteps(&mut self, num_microsteps: u16) -> Result<()> {
+        let mut global_config = self.global_config()?;
+        if num_microsteps == 0 {
+            global_config.uart_selects_microsteps = false;
+        } else {
+            global_config.uart_selects_microsteps = true;
+            let mut driver_config = self.driver_config()?;
+            driver_config.microstep_resolution = num_microsteps.into();
+            self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
+        }
+        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
+        Ok(())
+    }
+
+    pub fn steps_per_rev(&self) -> u32 {
+        self.steps_per_rev
+    }
+
+    pub fn set_steps_per_rev(&mut self, steps: u32) {
+        self.steps_per_rev = steps;
+    }
+
+    pub fn filter_step_pulses(&mut self) -> Result<bool> {
+        Ok(self.global_config()?.filter_step_pulses)
+    }
+
+    pub fn set_filter_step_pulses(&mut self, enable: bool) -> Result<()> {
+        let mut config = self.global_config()?;
+        config.filter_step_pulses = enable;
+        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
+        Ok(())
+    }
+
+    pub fn double_edge_step(&mut self) -> Result<bool> {
+        Ok(self.driver_config()?.double_edge_step)
+    }
+
+    pub fn set_double_edge_step(&mut self, enable: bool) -> Result<()> {
+        let mut config = self.driver_config()?;
+        config.double_edge_step = enable;
+        self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(config))?;
+        Ok(())
+    }
+
+    pub fn interpolate_microsteps(&mut self) -> Result<bool> {
+        Ok(self.driver_config()?.interpolate_microsteps)
+    }
+
+    pub fn set_interpolate_microsteps(&mut self, enable: bool) -> Result<()> {
+        let mut config = self.driver_config()?;
+        config.interpolate_microsteps = enable;
+        self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(config))?;
         Ok(())
     }
 
@@ -1065,46 +1082,6 @@ impl<'a> Tmc2209<'a> {
         Ok(())
     }
 
-    pub fn double_edge_step(&mut self) -> Result<bool> {
-        Ok(self.driver_config()?.double_edge_step)
-    }
-
-    pub fn set_double_edge_step(&mut self, enable: bool) -> Result<()> {
-        let mut config = self.driver_config()?;
-        config.double_edge_step = enable;
-        self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(config))?;
-        Ok(())
-    }
-
-    pub fn interpolate_microsteps(&mut self) -> Result<bool> {
-        Ok(self.driver_config()?.interpolate_microsteps)
-    }
-
-    pub fn set_interpolate_microsteps(&mut self, enable: bool) -> Result<()> {
-        let mut config = self.driver_config()?;
-        config.interpolate_microsteps = enable;
-        self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(config))?;
-        Ok(())
-    }
-
-    pub fn microsteps(&mut self) -> Result<u16> {
-        Ok(self.driver_config()?.microstep_resolution.into())
-    }
-
-    pub fn set_microsteps(&mut self, num_microsteps: u16) -> Result<()> {
-        let mut global_config = self.global_config()?;
-        if num_microsteps == 0 {
-            global_config.uart_selects_microsteps = false;
-        } else {
-            global_config.uart_selects_microsteps = true;
-            let mut driver_config = self.driver_config()?;
-            driver_config.microstep_resolution = num_microsteps.into();
-            self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
-        }
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
-        Ok(())
-    }
-
     pub fn blank_time(&mut self) -> Result<BlankTime> {
         Ok(self.driver_config()?.blank_time)
     }
@@ -1162,6 +1139,26 @@ impl<'a> Tmc2209<'a> {
     }
 
     // PWM Configs
+    pub fn pwm_max_rpm(&mut self) -> Result<f64> {
+        if self.global_config()?.disable_pwm ^ self.disable_pwm_pin()? {
+            return Ok(0.0);
+        }
+
+        if let FrameData::PwmThreshold(threshold) = self.read_register(PWM_THRESHOLD_REG)? {
+            Ok(60.0 * self.clock_hz as f64 / (255.0 * (threshold * self.steps_per_rev) as f64))
+        } else {
+            Err(Tmc2209Error::InvalidResponse)
+        }
+    }
+
+    pub fn set_pwm_max_rpm(&mut self, rpm: f64) -> Result<()> {
+        let threshold =
+            libm::round(60.0 * self.clock_hz as f64 / (255.0 * rpm * self.steps_per_rev as f64))
+                as u32;
+        self.write_register(PWM_THRESHOLD_REG, FrameData::PwmThreshold(threshold))?;
+        Ok(())
+    }
+
     pub fn driver_switch_autoscale_limit(&mut self) -> Result<u8> {
         Ok(self.pwm_config()?.driver_switch_autoscale_limit)
     }

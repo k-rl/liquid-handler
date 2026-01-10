@@ -51,8 +51,6 @@ const SET_INDEX_OUTPUT: u8 = 0x0C;
 const GET_INDEX_OUTPUT: u8 = 0x0D;
 const SET_INVERT_DIRECTION: u8 = 0x0E;
 const GET_INVERT_DIRECTION: u8 = 0x0F;
-const SET_PWM_ENABLED: u8 = 0x10;
-const GET_PWM_ENABLED: u8 = 0x11;
 const SET_RMS_AMPS: u8 = 0x12;
 const GET_RMS_AMPS: u8 = 0x13;
 const SET_MICROSTEPS: u8 = 0x16;
@@ -97,12 +95,6 @@ enum Request {
 
     #[deku(id = "GET_INVERT_DIRECTION")]
     GetInvertDirection,
-
-    #[deku(id = "GET_PWM_ENABLED")]
-    GetPwmEnabled,
-
-    #[deku(id = "SET_PWM_ENABLED")]
-    SetPwmEnabled(bool),
 
     #[deku(id = "GET_RMS_AMPS")]
     GetRmsAmps,
@@ -160,12 +152,6 @@ enum Response {
 
     #[deku(id = "GET_INVERT_DIRECTION")]
     GetInvertDirection(bool),
-
-    #[deku(id = "SET_PWM_ENABLED")]
-    SetPwmEnabled,
-
-    #[deku(id = "GET_PWM_ENABLED")]
-    GetPwmEnabled(bool),
 
     #[deku(id = "SET_RMS_AMPS")]
     SetRmsAmps,
@@ -327,13 +313,6 @@ async fn handle_request<'a>(
         Request::SetInvertDirection(enable) => {
             tmc.lock(|x| x.borrow_mut().set_invert_direction(enable))?;
             Response::SetInvertDirection
-        }
-        Request::GetPwmEnabled => {
-            Response::GetPwmEnabled(tmc.lock(|x| x.borrow_mut().pwm_enabled())?)
-        }
-        Request::SetPwmEnabled(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_pwm_enabled(enable))?;
-            Response::SetPwmEnabled
         }
         Request::GetRmsAmps => {
             let (run, stop) = tmc.lock(|x| x.borrow_mut().rms_amps());
