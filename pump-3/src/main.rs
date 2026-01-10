@@ -12,7 +12,10 @@ mod usb;
 
 use crate::{
     flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType},
-    tmc2209::{IndexOutput, Tmc2209},
+    tmc2209::{
+        BlankTime, FreewheelMode, OvertemperatureStatus, PhaseStatus, PwmFrequency,
+        TemperatureThreshold, Tmc2209,
+    },
     usb::PacketStream,
 };
 use alloc::sync::Arc;
@@ -38,23 +41,100 @@ use panic_rtt_target as _;
 
 extern crate alloc;
 
-// Request/response codes.
+// Request/response codes. Keep contiguous.
 const INIT: u8 = 0x00;
 const FLOW_SENSOR_INFO: u8 = 0x01;
 const SET_PUMP_RPM: u8 = 0x02;
 const GET_PUMP_RPM: u8 = 0x03;
-const SET_FILTER_STEP_PULSES: u8 = 0x06;
-const GET_FILTER_STEP_PULSES: u8 = 0x07;
-const SET_PIN_UART_MODE: u8 = 0x0A;
-const GET_PIN_UART_MODE: u8 = 0x0B;
-const SET_INDEX_OUTPUT: u8 = 0x0C;
-const GET_INDEX_OUTPUT: u8 = 0x0D;
-const SET_INVERT_DIRECTION: u8 = 0x0E;
-const GET_INVERT_DIRECTION: u8 = 0x0F;
-const SET_RMS_AMPS: u8 = 0x12;
-const GET_RMS_AMPS: u8 = 0x13;
-const SET_MICROSTEPS: u8 = 0x16;
-const GET_MICROSTEPS: u8 = 0x17;
+const GET_RMS_AMPS: u8 = 0x0C;
+const SET_RMS_AMPS: u8 = 0x0D;
+const GET_STOP_MODE: u8 = 0x0E;
+const SET_STOP_MODE: u8 = 0x0F;
+const GET_POWERDOWN_DURATION_S: u8 = 0x10;
+const SET_POWERDOWN_DURATION_S: u8 = 0x11;
+const GET_POWERDOWN_DELAY_S: u8 = 0x12;
+const SET_POWERDOWN_DELAY_S: u8 = 0x13;
+const GET_MICROSTEPS: u8 = 0x14;
+const SET_MICROSTEPS: u8 = 0x15;
+const GET_STEPS_PER_REV: u8 = 0x16;
+const SET_STEPS_PER_REV: u8 = 0x17;
+const GET_FILTER_STEP_PULSES: u8 = 0x18;
+const SET_FILTER_STEP_PULSES: u8 = 0x19;
+const GET_DOUBLE_EDGE_STEP: u8 = 0x1A;
+const SET_DOUBLE_EDGE_STEP: u8 = 0x1B;
+const GET_INTERPOLATE_MICROSTEPS: u8 = 0x1C;
+const SET_INTERPOLATE_MICROSTEPS: u8 = 0x1D;
+const GET_COOLSTEP_THRESHOLD: u8 = 0x1E;
+const SET_COOLSTEP_THRESHOLD: u8 = 0x1F;
+const GET_STALLGUARD_THRESHOLD: u8 = 0x20;
+const SET_STALLGUARD_THRESHOLD: u8 = 0x21;
+const GET_COOLSTEP_LOWER_MIN_CURRENT: u8 = 0x22;
+const SET_COOLSTEP_LOWER_MIN_CURRENT: u8 = 0x23;
+const GET_COOLSTEP_CURRENT_DOWNSTEP_RATE: u8 = 0x24;
+const SET_COOLSTEP_CURRENT_DOWNSTEP_RATE: u8 = 0x25;
+const GET_STALLGUARD_HYSTERESIS: u8 = 0x26;
+const SET_STALLGUARD_HYSTERESIS: u8 = 0x27;
+const GET_CURRENT_UPSTEP: u8 = 0x28;
+const SET_CURRENT_UPSTEP: u8 = 0x29;
+const GET_COOLSTEP_STALLGUARD_THRESHOLD: u8 = 0x2A;
+const SET_COOLSTEP_STALLGUARD_THRESHOLD: u8 = 0x2B;
+const GET_SHORT_SUPPLY_PROTECT: u8 = 0x2C;
+const SET_SHORT_SUPPLY_PROTECT: u8 = 0x2D;
+const GET_SHORT_GROUND_PROTECT: u8 = 0x2E;
+const SET_SHORT_GROUND_PROTECT: u8 = 0x2F;
+const GET_BLANK_TIME: u8 = 0x30;
+const SET_BLANK_TIME: u8 = 0x31;
+const GET_HYSTERESIS_END: u8 = 0x32;
+const SET_HYSTERESIS_END: u8 = 0x33;
+const GET_HYSTERESIS_START: u8 = 0x34;
+const SET_HYSTERESIS_START: u8 = 0x35;
+const GET_DECAY_TIME: u8 = 0x36;
+const SET_DECAY_TIME: u8 = 0x37;
+const GET_PWM_MAX_RPM: u8 = 0x38;
+const SET_PWM_MAX_RPM: u8 = 0x39;
+const GET_DRIVER_SWITCH_AUTOSCALE_LIMIT: u8 = 0x3A;
+const SET_DRIVER_SWITCH_AUTOSCALE_LIMIT: u8 = 0x3B;
+const GET_MAX_AMPLITUDE_CHANGE: u8 = 0x3C;
+const SET_MAX_AMPLITUDE_CHANGE: u8 = 0x3D;
+const GET_PWM_AUTOGRADIENT: u8 = 0x3E;
+const SET_PWM_AUTOGRADIENT: u8 = 0x3F;
+const GET_PWN_AUTOSCALE: u8 = 0x40;
+const SET_PWN_AUTOSCALE: u8 = 0x41;
+const GET_PWM_FREQUENCY: u8 = 0x42;
+const SET_PWM_FREQUENCY: u8 = 0x43;
+const GET_PWM_GRADIENT: u8 = 0x44;
+const SET_PWM_GRADIENT: u8 = 0x45;
+const GET_PWM_OFFSET: u8 = 0x46;
+const SET_PWM_OFFSET: u8 = 0x47;
+const GET_INVERT_DIRECTION: u8 = 0x48;
+const SET_INVERT_DIRECTION: u8 = 0x49;
+const GET_VELOCITY: u8 = 0x4A;
+const SET_VELOCITY: u8 = 0x4B;
+const GET_CHARGE_PUMP_UNDERVOLTAGE: u8 = 0x4C;
+const GET_DRIVER_ERROR: u8 = 0x4D;
+const GET_IS_RESET: u8 = 0x4E;
+const GET_TRANSMISSION_COUNT: u8 = 0x4F;
+const GET_VERSION: u8 = 0x50;
+const GET_DIRECTION_PIN: u8 = 0x51;
+const GET_DISABLE_PWM_PIN: u8 = 0x52;
+const GET_STEP_PIN: u8 = 0x53;
+const GET_POWERDOWN_UART_PIN: u8 = 0x54;
+const GET_DIAGNOSTIC_PIN: u8 = 0x55;
+const GET_MICROSTEP2_PIN: u8 = 0x56;
+const GET_MICROSTEP1_PIN: u8 = 0x57;
+const GET_DISABLE_PIN: u8 = 0x58;
+const GET_MICROSTEP_TIME: u8 = 0x59;
+const GET_MOTOR_LOAD: u8 = 0x5A;
+const GET_MICROSTEP_POSITION: u8 = 0x5B;
+const GET_MICROSTEP_CURRENT: u8 = 0x5C;
+const GET_STOPPED: u8 = 0x5D;
+const GET_PWM_MODE: u8 = 0x5E;
+const GET_CURRENT_SCALE: u8 = 0x5F;
+const GET_TEMPERATURE: u8 = 0x60;
+const GET_OPEN_LOAD: u8 = 0x61;
+const GET_LOW_SIDE_SHORT: u8 = 0x62;
+const GET_GROUND_SHORT: u8 = 0x63;
+const GET_OVERTEMPERATURE: u8 = 0x64;
 const FAIL: u8 = 0xFF;
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
@@ -67,34 +147,10 @@ enum Request {
     FlowSensorInfo,
 
     #[deku(id = "SET_PUMP_RPM")]
-    SetPumpRps(f64),
+    SetPumpRpm(f64),
 
     #[deku(id = "GET_PUMP_RPM")]
-    GetPumpRps,
-
-    #[deku(id = "SET_FILTER_STEP_PULSES")]
-    SetFilterStepPulses(bool),
-
-    #[deku(id = "GET_FILTER_STEP_PULSES")]
-    GetFilterStepPulses,
-
-    #[deku(id = "SET_PIN_UART_MODE")]
-    SetPinUartMode(bool),
-
-    #[deku(id = "GET_PIN_UART_MODE")]
-    GetPinUartMode,
-
-    #[deku(id = "SET_INDEX_OUTPUT")]
-    SetIndexOutput(IndexOutput),
-
-    #[deku(id = "GET_INDEX_OUTPUT")]
-    GetIndexOutput,
-
-    #[deku(id = "SET_INVERT_DIRECTION")]
-    SetInvertDirection(bool),
-
-    #[deku(id = "GET_INVERT_DIRECTION")]
-    GetInvertDirection,
+    GetPumpRpm,
 
     #[deku(id = "GET_RMS_AMPS")]
     GetRmsAmps,
@@ -107,11 +163,266 @@ enum Request {
         sense_ohms: f64,
     },
 
+    #[deku(id = "GET_STOP_MODE")]
+    GetStopMode,
+
+    #[deku(id = "SET_STOP_MODE")]
+    SetStopMode(FreewheelMode),
+
+    #[deku(id = "GET_POWERDOWN_DURATION_S")]
+    GetPowerdownDurationS,
+
+    #[deku(id = "SET_POWERDOWN_DURATION_S")]
+    SetPowerdownDurationS(f64),
+
+    #[deku(id = "GET_POWERDOWN_DELAY_S")]
+    GetPowerdownDelayS,
+
+    #[deku(id = "SET_POWERDOWN_DELAY_S")]
+    SetPowerdownDelayS(f64),
+
     #[deku(id = "GET_MICROSTEPS")]
     GetMicrosteps,
 
     #[deku(id = "SET_MICROSTEPS")]
     SetMicrosteps(u16),
+
+    #[deku(id = "GET_STEPS_PER_REV")]
+    GetStepsPerRev,
+
+    #[deku(id = "SET_STEPS_PER_REV")]
+    SetStepsPerRev(u32),
+
+    #[deku(id = "GET_FILTER_STEP_PULSES")]
+    GetFilterStepPulses,
+
+    #[deku(id = "SET_FILTER_STEP_PULSES")]
+    SetFilterStepPulses(bool),
+
+    #[deku(id = "GET_DOUBLE_EDGE_STEP")]
+    GetDoubleEdgeStep,
+
+    #[deku(id = "SET_DOUBLE_EDGE_STEP")]
+    SetDoubleEdgeStep(bool),
+
+    #[deku(id = "GET_INTERPOLATE_MICROSTEPS")]
+    GetInterpolateMicrosteps,
+
+    #[deku(id = "SET_INTERPOLATE_MICROSTEPS")]
+    SetInterpolateMicrosteps(bool),
+
+    #[deku(id = "GET_COOLSTEP_THRESHOLD")]
+    GetCoolstepThreshold,
+
+    #[deku(id = "SET_COOLSTEP_THRESHOLD")]
+    SetCoolstepThreshold(u32),
+
+    #[deku(id = "GET_STALLGUARD_THRESHOLD")]
+    GetStallguardThreshold,
+
+    #[deku(id = "SET_STALLGUARD_THRESHOLD")]
+    SetStallguardThreshold(u8),
+
+    #[deku(id = "GET_COOLSTEP_LOWER_MIN_CURRENT")]
+    GetCoolstepLowerMinCurrent,
+
+    #[deku(id = "SET_COOLSTEP_LOWER_MIN_CURRENT")]
+    SetCoolstepLowerMinCurrent(bool),
+
+    #[deku(id = "GET_COOLSTEP_CURRENT_DOWNSTEP_RATE")]
+    GetCoolstepCurrentDownstepRate,
+
+    #[deku(id = "SET_COOLSTEP_CURRENT_DOWNSTEP_RATE")]
+    SetCoolstepCurrentDownstepRate(u8),
+
+    #[deku(id = "GET_STALLGUARD_HYSTERESIS")]
+    GetStallguardHysteresis,
+
+    #[deku(id = "SET_STALLGUARD_HYSTERESIS")]
+    SetStallguardHysteresis(u8),
+
+    #[deku(id = "GET_CURRENT_UPSTEP")]
+    GetCurrentUpstep,
+
+    #[deku(id = "SET_CURRENT_UPSTEP")]
+    SetCurrentUpstep(u8),
+
+    #[deku(id = "GET_COOLSTEP_STALLGUARD_THRESHOLD")]
+    GetCoolstepStallguardThreshold,
+
+    #[deku(id = "SET_COOLSTEP_STALLGUARD_THRESHOLD")]
+    SetCoolstepStallguardThreshold(u8),
+
+    #[deku(id = "GET_SHORT_SUPPLY_PROTECT")]
+    GetShortSupplyProtect,
+
+    #[deku(id = "SET_SHORT_SUPPLY_PROTECT")]
+    SetShortSupplyProtect(bool),
+
+    #[deku(id = "GET_SHORT_GROUND_PROTECT")]
+    GetShortGroundProtect,
+
+    #[deku(id = "SET_SHORT_GROUND_PROTECT")]
+    SetShortGroundProtect(bool),
+
+    #[deku(id = "GET_BLANK_TIME")]
+    GetBlankTime,
+
+    #[deku(id = "SET_BLANK_TIME")]
+    SetBlankTime(BlankTime),
+
+    #[deku(id = "GET_HYSTERESIS_END")]
+    GetHysteresisEnd,
+
+    #[deku(id = "SET_HYSTERESIS_END")]
+    SetHysteresisEnd(i8),
+
+    #[deku(id = "GET_HYSTERESIS_START")]
+    GetHysteresisStart,
+
+    #[deku(id = "SET_HYSTERESIS_START")]
+    SetHysteresisStart(u8),
+
+    #[deku(id = "GET_DECAY_TIME")]
+    GetDecayTime,
+
+    #[deku(id = "SET_DECAY_TIME")]
+    SetDecayTime(u8),
+
+    #[deku(id = "GET_PWM_MAX_RPM")]
+    GetPwmMaxRpm,
+
+    #[deku(id = "SET_PWM_MAX_RPM")]
+    SetPwmMaxRpm(f64),
+
+    #[deku(id = "GET_DRIVER_SWITCH_AUTOSCALE_LIMIT")]
+    GetDriverSwitchAutoscaleLimit,
+
+    #[deku(id = "SET_DRIVER_SWITCH_AUTOSCALE_LIMIT")]
+    SetDriverSwitchAutoscaleLimit(u8),
+
+    #[deku(id = "GET_MAX_AMPLITUDE_CHANGE")]
+    GetMaxAmplitudeChange,
+
+    #[deku(id = "SET_MAX_AMPLITUDE_CHANGE")]
+    SetMaxAmplitudeChange(u8),
+
+    #[deku(id = "GET_PWM_AUTOGRADIENT")]
+    GetPwmAutogradient,
+
+    #[deku(id = "SET_PWM_AUTOGRADIENT")]
+    SetPwmAutogradient(bool),
+
+    #[deku(id = "GET_PWN_AUTOSCALE")]
+    GetPwnAutoscale,
+
+    #[deku(id = "SET_PWN_AUTOSCALE")]
+    SetPwnAutoscale(bool),
+
+    #[deku(id = "GET_PWM_FREQUENCY")]
+    GetPwmFrequency,
+
+    #[deku(id = "SET_PWM_FREQUENCY")]
+    SetPwmFrequency(PwmFrequency),
+
+    #[deku(id = "GET_PWM_GRADIENT")]
+    GetPwmGradient,
+
+    #[deku(id = "SET_PWM_GRADIENT")]
+    SetPwmGradient(u8),
+
+    #[deku(id = "GET_PWM_OFFSET")]
+    GetPwmOffset,
+
+    #[deku(id = "SET_PWM_OFFSET")]
+    SetPwmOffset(u8),
+
+    #[deku(id = "GET_INVERT_DIRECTION")]
+    GetInvertDirection,
+
+    #[deku(id = "SET_INVERT_DIRECTION")]
+    SetInvertDirection(bool),
+
+    #[deku(id = "GET_VELOCITY")]
+    GetVelocity,
+
+    #[deku(id = "SET_VELOCITY")]
+    SetVelocity(f64),
+
+    #[deku(id = "GET_CHARGE_PUMP_UNDERVOLTAGE")]
+    GetChargePumpUndervoltage,
+
+    #[deku(id = "GET_DRIVER_ERROR")]
+    GetDriverError,
+
+    #[deku(id = "GET_IS_RESET")]
+    GetIsReset,
+
+    #[deku(id = "GET_TRANSMISSION_COUNT")]
+    GetTransmissionCount,
+
+    #[deku(id = "GET_VERSION")]
+    GetVersion,
+
+    #[deku(id = "GET_DIRECTION_PIN")]
+    GetDirectionPin,
+
+    #[deku(id = "GET_DISABLE_PWM_PIN")]
+    GetDisablePwmPin,
+
+    #[deku(id = "GET_STEP_PIN")]
+    GetStepPin,
+
+    #[deku(id = "GET_POWERDOWN_UART_PIN")]
+    GetPowerdownUartPin,
+
+    #[deku(id = "GET_DIAGNOSTIC_PIN")]
+    GetDiagnosticPin,
+
+    #[deku(id = "GET_MICROSTEP2_PIN")]
+    GetMicrostep2Pin,
+
+    #[deku(id = "GET_MICROSTEP1_PIN")]
+    GetMicrostep1Pin,
+
+    #[deku(id = "GET_DISABLE_PIN")]
+    GetDisablePin,
+
+    #[deku(id = "GET_MICROSTEP_TIME")]
+    GetMicrostepTime,
+
+    #[deku(id = "GET_MOTOR_LOAD")]
+    GetMotorLoad,
+
+    #[deku(id = "GET_MICROSTEP_POSITION")]
+    GetMicrostepPosition,
+
+    #[deku(id = "GET_MICROSTEP_CURRENT")]
+    GetMicrostepCurrent,
+
+    #[deku(id = "GET_STOPPED")]
+    GetStopped,
+
+    #[deku(id = "GET_PWM_MODE")]
+    GetPwmMode,
+
+    #[deku(id = "GET_CURRENT_SCALE")]
+    GetCurrentScale,
+
+    #[deku(id = "GET_TEMPERATURE")]
+    GetTemperature,
+
+    #[deku(id = "GET_OPEN_LOAD")]
+    GetOpenLoad,
+
+    #[deku(id = "GET_LOW_SIDE_SHORT")]
+    GetLowSideShort,
+
+    #[deku(id = "GET_GROUND_SHORT")]
+    GetGroundShort,
+
+    #[deku(id = "GET_OVERTEMPERATURE")]
+    GetOvertemperature,
 }
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
@@ -124,46 +435,277 @@ enum Response {
     FlowSensorInfo(FlowSensorInfo),
 
     #[deku(id = "SET_PUMP_RPM")]
-    SetPumpRps,
+    SetPumpRpm,
 
     #[deku(id = "GET_PUMP_RPM")]
-    GetPumpRps(f64),
+    GetPumpRpm(f64),
 
-    #[deku(id = "SET_FILTER_STEP_PULSES")]
-    SetFilterStepPulses,
-
-    #[deku(id = "GET_FILTER_STEP_PULSES")]
-    GetFilterStepPulses(bool),
-
-    #[deku(id = "SET_PIN_UART_MODE")]
-    SetPinUartMode,
-
-    #[deku(id = "GET_PIN_UART_MODE")]
-    GetPinUartMode(bool),
-
-    #[deku(id = "SET_INDEX_OUTPUT")]
-    SetIndexOutput,
-
-    #[deku(id = "GET_INDEX_OUTPUT")]
-    GetIndexOutput(IndexOutput),
-
-    #[deku(id = "SET_INVERT_DIRECTION")]
-    SetInvertDirection,
-
-    #[deku(id = "GET_INVERT_DIRECTION")]
-    GetInvertDirection(bool),
+    #[deku(id = "GET_RMS_AMPS")]
+    GetRmsAmps(f64, f64),
 
     #[deku(id = "SET_RMS_AMPS")]
     SetRmsAmps,
 
-    #[deku(id = "GET_RMS_AMPS")]
-    GetRmsAmps(f64, f64),
+    #[deku(id = "GET_STOP_MODE")]
+    GetStopMode(FreewheelMode),
+
+    #[deku(id = "SET_STOP_MODE")]
+    SetStopMode,
+
+    #[deku(id = "GET_POWERDOWN_DURATION_S")]
+    GetPowerdownDurationS(f64),
+
+    #[deku(id = "SET_POWERDOWN_DURATION_S")]
+    SetPowerdownDurationS,
+
+    #[deku(id = "GET_POWERDOWN_DELAY_S")]
+    GetPowerdownDelayS(f64),
+
+    #[deku(id = "SET_POWERDOWN_DELAY_S")]
+    SetPowerdownDelayS,
 
     #[deku(id = "GET_MICROSTEPS")]
     GetMicrosteps(u16),
 
     #[deku(id = "SET_MICROSTEPS")]
     SetMicrosteps,
+
+    #[deku(id = "GET_STEPS_PER_REV")]
+    GetStepsPerRev(u32),
+
+    #[deku(id = "SET_STEPS_PER_REV")]
+    SetStepsPerRev,
+
+    #[deku(id = "GET_FILTER_STEP_PULSES")]
+    GetFilterStepPulses(bool),
+
+    #[deku(id = "SET_FILTER_STEP_PULSES")]
+    SetFilterStepPulses,
+
+    #[deku(id = "GET_DOUBLE_EDGE_STEP")]
+    GetDoubleEdgeStep(bool),
+
+    #[deku(id = "SET_DOUBLE_EDGE_STEP")]
+    SetDoubleEdgeStep,
+
+    #[deku(id = "GET_INTERPOLATE_MICROSTEPS")]
+    GetInterpolateMicrosteps(bool),
+
+    #[deku(id = "SET_INTERPOLATE_MICROSTEPS")]
+    SetInterpolateMicrosteps,
+
+    #[deku(id = "GET_COOLSTEP_THRESHOLD")]
+    GetCoolstepThreshold(u32),
+
+    #[deku(id = "SET_COOLSTEP_THRESHOLD")]
+    SetCoolstepThreshold,
+
+    #[deku(id = "GET_STALLGUARD_THRESHOLD")]
+    GetStallguardThreshold(u8),
+
+    #[deku(id = "SET_STALLGUARD_THRESHOLD")]
+    SetStallguardThreshold,
+
+    #[deku(id = "GET_COOLSTEP_LOWER_MIN_CURRENT")]
+    GetCoolstepLowerMinCurrent(bool),
+
+    #[deku(id = "SET_COOLSTEP_LOWER_MIN_CURRENT")]
+    SetCoolstepLowerMinCurrent,
+
+    #[deku(id = "GET_COOLSTEP_CURRENT_DOWNSTEP_RATE")]
+    GetCoolstepCurrentDownstepRate(u8),
+
+    #[deku(id = "SET_COOLSTEP_CURRENT_DOWNSTEP_RATE")]
+    SetCoolstepCurrentDownstepRate,
+
+    #[deku(id = "GET_STALLGUARD_HYSTERESIS")]
+    GetStallguardHysteresis(u8),
+
+    #[deku(id = "SET_STALLGUARD_HYSTERESIS")]
+    SetStallguardHysteresis,
+
+    #[deku(id = "GET_CURRENT_UPSTEP")]
+    GetCurrentUpstep(u8),
+
+    #[deku(id = "SET_CURRENT_UPSTEP")]
+    SetCurrentUpstep,
+
+    #[deku(id = "GET_COOLSTEP_STALLGUARD_THRESHOLD")]
+    GetCoolstepStallguardThreshold(u8),
+
+    #[deku(id = "SET_COOLSTEP_STALLGUARD_THRESHOLD")]
+    SetCoolstepStallguardThreshold,
+
+    #[deku(id = "GET_SHORT_SUPPLY_PROTECT")]
+    GetShortSupplyProtect(bool),
+
+    #[deku(id = "SET_SHORT_SUPPLY_PROTECT")]
+    SetShortSupplyProtect,
+
+    #[deku(id = "GET_SHORT_GROUND_PROTECT")]
+    GetShortGroundProtect(bool),
+
+    #[deku(id = "SET_SHORT_GROUND_PROTECT")]
+    SetShortGroundProtect,
+
+    #[deku(id = "GET_BLANK_TIME")]
+    GetBlankTime(BlankTime),
+
+    #[deku(id = "SET_BLANK_TIME")]
+    SetBlankTime,
+
+    #[deku(id = "GET_HYSTERESIS_END")]
+    GetHysteresisEnd(i8),
+
+    #[deku(id = "SET_HYSTERESIS_END")]
+    SetHysteresisEnd,
+
+    #[deku(id = "GET_HYSTERESIS_START")]
+    GetHysteresisStart(u8),
+
+    #[deku(id = "SET_HYSTERESIS_START")]
+    SetHysteresisStart,
+
+    #[deku(id = "GET_DECAY_TIME")]
+    GetDecayTime(u8),
+
+    #[deku(id = "SET_DECAY_TIME")]
+    SetDecayTime,
+
+    #[deku(id = "GET_PWM_MAX_RPM")]
+    GetPwmMaxRpm(f64),
+
+    #[deku(id = "SET_PWM_MAX_RPM")]
+    SetPwmMaxRpm,
+
+    #[deku(id = "GET_DRIVER_SWITCH_AUTOSCALE_LIMIT")]
+    GetDriverSwitchAutoscaleLimit(u8),
+
+    #[deku(id = "SET_DRIVER_SWITCH_AUTOSCALE_LIMIT")]
+    SetDriverSwitchAutoscaleLimit,
+
+    #[deku(id = "GET_MAX_AMPLITUDE_CHANGE")]
+    GetMaxAmplitudeChange(u8),
+
+    #[deku(id = "SET_MAX_AMPLITUDE_CHANGE")]
+    SetMaxAmplitudeChange,
+
+    #[deku(id = "GET_PWM_AUTOGRADIENT")]
+    GetPwmAutogradient(bool),
+
+    #[deku(id = "SET_PWM_AUTOGRADIENT")]
+    SetPwmAutogradient,
+
+    #[deku(id = "GET_PWN_AUTOSCALE")]
+    GetPwnAutoscale(bool),
+
+    #[deku(id = "SET_PWN_AUTOSCALE")]
+    SetPwnAutoscale,
+
+    #[deku(id = "GET_PWM_FREQUENCY")]
+    GetPwmFrequency(PwmFrequency),
+
+    #[deku(id = "SET_PWM_FREQUENCY")]
+    SetPwmFrequency,
+
+    #[deku(id = "GET_PWM_GRADIENT")]
+    GetPwmGradient(u8),
+
+    #[deku(id = "SET_PWM_GRADIENT")]
+    SetPwmGradient,
+
+    #[deku(id = "GET_PWM_OFFSET")]
+    GetPwmOffset(u8),
+
+    #[deku(id = "SET_PWM_OFFSET")]
+    SetPwmOffset,
+
+    #[deku(id = "GET_INVERT_DIRECTION")]
+    GetInvertDirection(bool),
+
+    #[deku(id = "SET_INVERT_DIRECTION")]
+    SetInvertDirection,
+
+    #[deku(id = "GET_VELOCITY")]
+    GetVelocity(f64),
+
+    #[deku(id = "SET_VELOCITY")]
+    SetVelocity,
+
+    #[deku(id = "GET_CHARGE_PUMP_UNDERVOLTAGE")]
+    GetChargePumpUndervoltage(bool),
+
+    #[deku(id = "GET_DRIVER_ERROR")]
+    GetDriverError(bool),
+
+    #[deku(id = "GET_IS_RESET")]
+    GetIsReset(bool),
+
+    #[deku(id = "GET_TRANSMISSION_COUNT")]
+    GetTransmissionCount(u8),
+
+    #[deku(id = "GET_VERSION")]
+    GetVersion(u8),
+
+    #[deku(id = "GET_DIRECTION_PIN")]
+    GetDirectionPin(bool),
+
+    #[deku(id = "GET_DISABLE_PWM_PIN")]
+    GetDisablePwmPin(bool),
+
+    #[deku(id = "GET_STEP_PIN")]
+    GetStepPin(bool),
+
+    #[deku(id = "GET_POWERDOWN_UART_PIN")]
+    GetPowerdownUartPin(bool),
+
+    #[deku(id = "GET_DIAGNOSTIC_PIN")]
+    GetDiagnosticPin(bool),
+
+    #[deku(id = "GET_MICROSTEP2_PIN")]
+    GetMicrostep2Pin(bool),
+
+    #[deku(id = "GET_MICROSTEP1_PIN")]
+    GetMicrostep1Pin(bool),
+
+    #[deku(id = "GET_DISABLE_PIN")]
+    GetDisablePin(bool),
+
+    #[deku(id = "GET_MICROSTEP_TIME")]
+    GetMicrostepTime(u32),
+
+    #[deku(id = "GET_MOTOR_LOAD")]
+    GetMotorLoad(u16),
+
+    #[deku(id = "GET_MICROSTEP_POSITION")]
+    GetMicrostepPosition(u16),
+
+    #[deku(id = "GET_MICROSTEP_CURRENT")]
+    GetMicrostepCurrent(i16, i16),
+
+    #[deku(id = "GET_STOPPED")]
+    GetStopped(bool),
+
+    #[deku(id = "GET_PWM_MODE")]
+    GetPwmMode(bool),
+
+    #[deku(id = "GET_CURRENT_SCALE")]
+    GetCurrentScale(u8),
+
+    #[deku(id = "GET_TEMPERATURE")]
+    GetTemperature(TemperatureThreshold),
+
+    #[deku(id = "GET_OPEN_LOAD")]
+    GetOpenLoad(PhaseStatus),
+
+    #[deku(id = "GET_LOW_SIDE_SHORT")]
+    GetLowSideShort(PhaseStatus),
+
+    #[deku(id = "GET_GROUND_SHORT")]
+    GetGroundShort(PhaseStatus),
+
+    #[deku(id = "GET_OVERTEMPERATURE")]
+    GetOvertemperature(OvertemperatureStatus),
 
     #[deku(id = "FAIL")]
     Fail,
@@ -281,39 +823,11 @@ async fn handle_request<'a>(
     let response = match packet {
         Request::Init => Response::Init,
         Request::FlowSensorInfo => Response::FlowSensorInfo(sensor.read().await?),
-        Request::SetPumpRps(rpm) => {
+        Request::SetPumpRpm(rpm) => {
             RPM.lock(|x| x.replace(rpm));
-            Response::SetPumpRps
+            Response::SetPumpRpm
         }
-        Request::GetPumpRps => Response::GetPumpRps(RPM.lock(|x| *x.borrow())),
-        Request::GetFilterStepPulses => {
-            Response::GetFilterStepPulses(tmc.lock(|x| x.borrow_mut().filter_step_pulses())?)
-        }
-        Request::SetFilterStepPulses(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_filter_step_pulses(enable))?;
-            Response::SetFilterStepPulses
-        }
-        Request::GetPinUartMode => {
-            Response::GetPinUartMode(tmc.lock(|x| x.borrow_mut().pin_uart_mode())?)
-        }
-        Request::SetPinUartMode(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_pin_uart_mode(enable))?;
-            Response::SetPinUartMode
-        }
-        Request::GetIndexOutput => {
-            Response::GetIndexOutput(tmc.lock(|x| x.borrow_mut().index_output())?)
-        }
-        Request::SetIndexOutput(output) => {
-            tmc.lock(|x| x.borrow_mut().set_index_output(output))?;
-            Response::SetIndexOutput
-        }
-        Request::GetInvertDirection => {
-            Response::GetInvertDirection(tmc.lock(|x| x.borrow_mut().invert_direction())?)
-        }
-        Request::SetInvertDirection(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_invert_direction(enable))?;
-            Response::SetInvertDirection
-        }
+        Request::GetPumpRpm => Response::GetPumpRpm(RPM.lock(|x| *x.borrow())),
         Request::GetRmsAmps => {
             let (run, stop) = tmc.lock(|x| x.borrow_mut().rms_amps());
             Response::GetRmsAmps(run, stop)
@@ -334,12 +848,274 @@ async fn handle_request<'a>(
             })?;
             Response::SetRmsAmps
         }
+        Request::GetStopMode => Response::GetStopMode(tmc.lock(|x| x.borrow_mut().stop_mode())?),
+        Request::SetStopMode(mode) => {
+            tmc.lock(|x| x.borrow_mut().set_stop_mode(mode))?;
+            Response::SetStopMode
+        }
+        Request::GetPowerdownDurationS => {
+            Response::GetPowerdownDurationS(tmc.lock(|x| x.borrow_mut().powerdown_duration_s())?)
+        }
+        Request::SetPowerdownDurationS(duration) => {
+            tmc.lock(|x| x.borrow_mut().set_powerdown_duration_s(duration))?;
+            Response::SetPowerdownDurationS
+        }
+        Request::GetPowerdownDelayS => {
+            Response::GetPowerdownDelayS(tmc.lock(|x| x.borrow_mut().powerdown_delay_s())?)
+        }
+        Request::SetPowerdownDelayS(delay) => {
+            tmc.lock(|x| x.borrow_mut().set_powerdown_delay_s(delay))?;
+            Response::SetPowerdownDelayS
+        }
         Request::GetMicrosteps => {
             Response::GetMicrosteps(tmc.lock(|x| x.borrow_mut().microsteps())?)
         }
         Request::SetMicrosteps(n) => {
             tmc.lock(|x| x.borrow_mut().set_microsteps(n))?;
             Response::SetMicrosteps
+        }
+        Request::GetStepsPerRev => {
+            Response::GetStepsPerRev(tmc.lock(|x| x.borrow_mut().steps_per_rev()))
+        }
+        Request::SetStepsPerRev(steps) => {
+            tmc.lock(|x| x.borrow_mut().set_steps_per_rev(steps));
+            Response::SetStepsPerRev
+        }
+        Request::GetFilterStepPulses => {
+            Response::GetFilterStepPulses(tmc.lock(|x| x.borrow_mut().filter_step_pulses())?)
+        }
+        Request::SetFilterStepPulses(enable) => {
+            tmc.lock(|x| x.borrow_mut().set_filter_step_pulses(enable))?;
+            Response::SetFilterStepPulses
+        }
+        Request::GetDoubleEdgeStep => {
+            Response::GetDoubleEdgeStep(tmc.lock(|x| x.borrow_mut().double_edge_step())?)
+        }
+        Request::SetDoubleEdgeStep(enable) => {
+            tmc.lock(|x| x.borrow_mut().set_double_edge_step(enable))?;
+            Response::SetDoubleEdgeStep
+        }
+        Request::GetInterpolateMicrosteps => Response::GetInterpolateMicrosteps(
+            tmc.lock(|x| x.borrow_mut().interpolate_microsteps())?,
+        ),
+        Request::SetInterpolateMicrosteps(enable) => {
+            tmc.lock(|x| x.borrow_mut().set_interpolate_microsteps(enable))?;
+            Response::SetInterpolateMicrosteps
+        }
+        Request::GetCoolstepThreshold => {
+            Response::GetCoolstepThreshold(tmc.lock(|x| x.borrow_mut().coolstep_threshold())?)
+        }
+        Request::SetCoolstepThreshold(threshold) => {
+            tmc.lock(|x| x.borrow_mut().set_coolstep_threshold(threshold))?;
+            Response::SetCoolstepThreshold
+        }
+        Request::GetStallguardThreshold => {
+            Response::GetStallguardThreshold(tmc.lock(|x| x.borrow_mut().stallguard_threshold())?)
+        }
+        Request::SetStallguardThreshold(threshold) => {
+            tmc.lock(|x| x.borrow_mut().set_stallguard_threshold(threshold))?;
+            Response::SetStallguardThreshold
+        }
+        Request::GetCoolstepLowerMinCurrent => Response::GetCoolstepLowerMinCurrent(
+            tmc.lock(|x| x.borrow_mut().coolstep_lower_min_current())?,
+        ),
+        Request::SetCoolstepLowerMinCurrent(enable) => {
+            tmc.lock(|x| x.borrow_mut().set_coolstep_lower_min_current(enable))?;
+            Response::SetCoolstepLowerMinCurrent
+        }
+        Request::GetCoolstepCurrentDownstepRate => Response::GetCoolstepCurrentDownstepRate(
+            tmc.lock(|x| x.borrow_mut().coolstep_current_downstep_rate())?,
+        ),
+        Request::SetCoolstepCurrentDownstepRate(rate) => {
+            tmc.lock(|x| x.borrow_mut().set_coolstep_current_downstep_rate(rate))?;
+            Response::SetCoolstepCurrentDownstepRate
+        }
+        Request::GetStallguardHysteresis => {
+            Response::GetStallguardHysteresis(tmc.lock(|x| x.borrow_mut().stallguard_hysteresis())?)
+        }
+        Request::SetStallguardHysteresis(hysteresis) => {
+            tmc.lock(|x| x.borrow_mut().set_stallguard_hysteresis(hysteresis))?;
+            Response::SetStallguardHysteresis
+        }
+        Request::GetCurrentUpstep => {
+            Response::GetCurrentUpstep(tmc.lock(|x| x.borrow_mut().current_upstep())?)
+        }
+        Request::SetCurrentUpstep(upstep) => {
+            tmc.lock(|x| x.borrow_mut().set_current_upstep(upstep))?;
+            Response::SetCurrentUpstep
+        }
+        Request::GetCoolstepStallguardThreshold => Response::GetCoolstepStallguardThreshold(
+            tmc.lock(|x| x.borrow_mut().coolstep_stallguard_threshold())?,
+        ),
+        Request::SetCoolstepStallguardThreshold(threshold) => {
+            tmc.lock(|x| x.borrow_mut().set_coolstep_stallguard_threshold(threshold))?;
+            Response::SetCoolstepStallguardThreshold
+        }
+        Request::GetShortSupplyProtect => {
+            Response::GetShortSupplyProtect(tmc.lock(|x| x.borrow_mut().short_supply_protect())?)
+        }
+        Request::SetShortSupplyProtect(enable) => {
+            tmc.lock(|x| x.borrow_mut().set_short_supply_protect(enable))?;
+            Response::SetShortSupplyProtect
+        }
+        Request::GetShortGroundProtect => {
+            Response::GetShortGroundProtect(tmc.lock(|x| x.borrow_mut().short_ground_protect())?)
+        }
+        Request::SetShortGroundProtect(enable) => {
+            tmc.lock(|x| x.borrow_mut().set_short_ground_protect(enable))?;
+            Response::SetShortGroundProtect
+        }
+        Request::GetBlankTime => Response::GetBlankTime(tmc.lock(|x| x.borrow_mut().blank_time())?),
+        Request::SetBlankTime(time) => {
+            tmc.lock(|x| x.borrow_mut().set_blank_time(time))?;
+            Response::SetBlankTime
+        }
+        Request::GetHysteresisEnd => {
+            Response::GetHysteresisEnd(tmc.lock(|x| x.borrow_mut().hysteresis_end())?)
+        }
+        Request::SetHysteresisEnd(end) => {
+            tmc.lock(|x| x.borrow_mut().set_hysteresis_end(end))?;
+            Response::SetHysteresisEnd
+        }
+        Request::GetHysteresisStart => {
+            Response::GetHysteresisStart(tmc.lock(|x| x.borrow_mut().hysteresis_start())?)
+        }
+        Request::SetHysteresisStart(start) => {
+            tmc.lock(|x| x.borrow_mut().set_hysteresis_start(start))?;
+            Response::SetHysteresisStart
+        }
+        Request::GetDecayTime => Response::GetDecayTime(tmc.lock(|x| x.borrow_mut().decay_time())?),
+        Request::SetDecayTime(time) => {
+            tmc.lock(|x| x.borrow_mut().set_decay_time(time))?;
+            Response::SetDecayTime
+        }
+        Request::GetPwmMaxRpm => {
+            Response::GetPwmMaxRpm(tmc.lock(|x| x.borrow_mut().pwm_max_rpm())?)
+        }
+        Request::SetPwmMaxRpm(rpm) => {
+            tmc.lock(|x| x.borrow_mut().set_pwm_max_rpm(rpm))?;
+            Response::SetPwmMaxRpm
+        }
+        Request::GetDriverSwitchAutoscaleLimit => Response::GetDriverSwitchAutoscaleLimit(
+            tmc.lock(|x| x.borrow_mut().driver_switch_autoscale_limit())?,
+        ),
+        Request::SetDriverSwitchAutoscaleLimit(limit) => {
+            tmc.lock(|x| x.borrow_mut().set_driver_switch_autoscale_limit(limit))?;
+            Response::SetDriverSwitchAutoscaleLimit
+        }
+        Request::GetMaxAmplitudeChange => {
+            Response::GetMaxAmplitudeChange(tmc.lock(|x| x.borrow_mut().max_amplitude_change())?)
+        }
+        Request::SetMaxAmplitudeChange(change) => {
+            tmc.lock(|x| x.borrow_mut().set_max_amplitude_change(change))?;
+            Response::SetMaxAmplitudeChange
+        }
+        Request::GetPwmAutogradient => {
+            Response::GetPwmAutogradient(tmc.lock(|x| x.borrow_mut().pwm_autogradient())?)
+        }
+        Request::SetPwmAutogradient(enable) => {
+            tmc.lock(|x| x.borrow_mut().set_pwm_autogradient(enable))?;
+            Response::SetPwmAutogradient
+        }
+        Request::GetPwnAutoscale => {
+            Response::GetPwnAutoscale(tmc.lock(|x| x.borrow_mut().pwn_autoscale())?)
+        }
+        Request::SetPwnAutoscale(enable) => {
+            tmc.lock(|x| x.borrow_mut().set_pwn_autoscale(enable))?;
+            Response::SetPwnAutoscale
+        }
+        Request::GetPwmFrequency => {
+            Response::GetPwmFrequency(tmc.lock(|x| x.borrow_mut().pwm_frequency())?)
+        }
+        Request::SetPwmFrequency(frequency) => {
+            tmc.lock(|x| x.borrow_mut().set_pwm_frequency(frequency))?;
+            Response::SetPwmFrequency
+        }
+        Request::GetPwmGradient => {
+            Response::GetPwmGradient(tmc.lock(|x| x.borrow_mut().pwm_gradient())?)
+        }
+        Request::SetPwmGradient(gradient) => {
+            tmc.lock(|x| x.borrow_mut().set_pwm_gradient(gradient))?;
+            Response::SetPwmGradient
+        }
+        Request::GetPwmOffset => Response::GetPwmOffset(tmc.lock(|x| x.borrow_mut().pwm_offset())?),
+        Request::SetPwmOffset(offset) => {
+            tmc.lock(|x| x.borrow_mut().set_pwm_offset(offset))?;
+            Response::SetPwmOffset
+        }
+        Request::GetInvertDirection => {
+            Response::GetInvertDirection(tmc.lock(|x| x.borrow_mut().invert_direction())?)
+        }
+        Request::SetInvertDirection(enable) => {
+            tmc.lock(|x| x.borrow_mut().set_invert_direction(enable))?;
+            Response::SetInvertDirection
+        }
+        Request::GetVelocity => Response::GetVelocity(tmc.lock(|x| x.borrow_mut().velocity())?),
+        Request::SetVelocity(rpm) => {
+            tmc.lock(|x| x.borrow_mut().set_velocity(rpm))?;
+            Response::SetVelocity
+        }
+        Request::GetChargePumpUndervoltage => Response::GetChargePumpUndervoltage(
+            tmc.lock(|x| x.borrow_mut().charge_pump_undervoltage())?,
+        ),
+        Request::GetDriverError => {
+            Response::GetDriverError(tmc.lock(|x| x.borrow_mut().driver_error())?)
+        }
+        Request::GetIsReset => Response::GetIsReset(tmc.lock(|x| x.borrow_mut().is_reset())?),
+        Request::GetTransmissionCount => {
+            Response::GetTransmissionCount(tmc.lock(|x| x.borrow_mut().transmission_count())?)
+        }
+        Request::GetVersion => Response::GetVersion(tmc.lock(|x| x.borrow_mut().version())?),
+        Request::GetDirectionPin => {
+            Response::GetDirectionPin(tmc.lock(|x| x.borrow_mut().direction_pin())?)
+        }
+        Request::GetDisablePwmPin => {
+            Response::GetDisablePwmPin(tmc.lock(|x| x.borrow_mut().disable_pwm_pin())?)
+        }
+        Request::GetStepPin => Response::GetStepPin(tmc.lock(|x| x.borrow_mut().step_pin())?),
+        Request::GetPowerdownUartPin => {
+            Response::GetPowerdownUartPin(tmc.lock(|x| x.borrow_mut().powerdown_uart_pin())?)
+        }
+        Request::GetDiagnosticPin => {
+            Response::GetDiagnosticPin(tmc.lock(|x| x.borrow_mut().diagnostic_pin())?)
+        }
+        Request::GetMicrostep2Pin => {
+            Response::GetMicrostep2Pin(tmc.lock(|x| x.borrow_mut().microstep2_pin())?)
+        }
+        Request::GetMicrostep1Pin => {
+            Response::GetMicrostep1Pin(tmc.lock(|x| x.borrow_mut().microstep1_pin())?)
+        }
+        Request::GetDisablePin => {
+            Response::GetDisablePin(tmc.lock(|x| x.borrow_mut().disable_pin())?)
+        }
+        Request::GetMicrostepTime => {
+            Response::GetMicrostepTime(tmc.lock(|x| x.borrow_mut().microstep_time())?)
+        }
+        Request::GetMotorLoad => Response::GetMotorLoad(tmc.lock(|x| x.borrow_mut().motor_load())?),
+        Request::GetMicrostepPosition => {
+            Response::GetMicrostepPosition(tmc.lock(|x| x.borrow_mut().microstep_position())?)
+        }
+        Request::GetMicrostepCurrent => {
+            let (a, b) = tmc.lock(|x| x.borrow_mut().microstep_current())?;
+            Response::GetMicrostepCurrent(a, b)
+        }
+        Request::GetStopped => Response::GetStopped(tmc.lock(|x| x.borrow_mut().stopped())?),
+        Request::GetPwmMode => Response::GetPwmMode(tmc.lock(|x| x.borrow_mut().pwm_mode())?),
+        Request::GetCurrentScale => {
+            Response::GetCurrentScale(tmc.lock(|x| x.borrow_mut().current_scale())?)
+        }
+        Request::GetTemperature => {
+            Response::GetTemperature(tmc.lock(|x| x.borrow_mut().temperature())?)
+        }
+        Request::GetOpenLoad => Response::GetOpenLoad(tmc.lock(|x| x.borrow_mut().open_load())?),
+        Request::GetLowSideShort => {
+            Response::GetLowSideShort(tmc.lock(|x| x.borrow_mut().low_side_short())?)
+        }
+        Request::GetGroundShort => {
+            Response::GetGroundShort(tmc.lock(|x| x.borrow_mut().ground_short())?)
+        }
+        Request::GetOvertemperature => {
+            Response::GetOvertemperature(tmc.lock(|x| x.borrow_mut().overtemperature())?)
         }
     };
     Ok(response)
@@ -364,7 +1140,7 @@ fn run_tmc(tmc: TmcMutex<'static>) -> ! {
     let mut i = 0;
     loop {
         let prev_v = v;
-        let target_v = RPM.lock(|x| *x.borrow());
+        let target_v = RPM.lock(|x| *x.borrow()) / 60.0;
         let v2 = v * v;
         let diff = target_v * target_v - v2;
         if diff.abs() < dv2 {

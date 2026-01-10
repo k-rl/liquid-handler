@@ -429,7 +429,7 @@ impl From<MicrostepResolution> for u16 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
     bits = 2,
@@ -465,7 +465,7 @@ struct DriverStatus {
     overtemperature: OvertemperatureStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
     bits = 2,
@@ -483,7 +483,7 @@ pub enum PhaseStatus {
     BothPhases,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
     bits = 4,
@@ -503,7 +503,7 @@ pub enum TemperatureThreshold {
     Temp157C,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
     bits = 2,
@@ -537,7 +537,7 @@ struct PwmConfig {
     offset: u8,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
     bits = 2,
@@ -555,7 +555,7 @@ pub enum PwmFrequency {
     Div410,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
     bits = 2,
@@ -669,7 +669,7 @@ impl<'a> Tmc2209<'a> {
             steps_per_rev: 200,
             running_rms_amps: f64::NAN,
             stopped_rms_amps: f64::NAN,
-            clock_hz: 12e10 as u64,
+            clock_hz: 12e9 as u64,
             /*
             global_config: GlobalConfig {
                 test_mode: false,
@@ -744,6 +744,7 @@ impl<'a> Tmc2209<'a> {
     // ====Configuration options====
     // =============================
 
+    // Global Configs
     pub fn clock_hz(&self) -> u64 {
         self.clock_hz
     }
@@ -752,7 +753,6 @@ impl<'a> Tmc2209<'a> {
         self.clock_hz = hz;
     }
 
-    // Global Configs
     pub fn pin_uart_mode(&mut self) -> Result<bool> {
         Ok(self.global_config()?.pin_uart_mode)
     }
@@ -775,17 +775,6 @@ impl<'a> Tmc2209<'a> {
         Ok(())
     }
 
-    pub fn invert_direction(&mut self) -> Result<bool> {
-        Ok(self.global_config()?.invert_direction)
-    }
-
-    pub fn set_invert_direction(&mut self, enable: bool) -> Result<()> {
-        let mut config = self.global_config()?;
-        config.invert_direction = enable;
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
-        Ok(())
-    }
-
     pub fn response_delay(&mut self) -> Result<u8> {
         if let FrameData::ResponseDelay(delay) = self.read_register(RESPONSE_DELAY_REG)? {
             Ok(delay)
@@ -803,6 +792,7 @@ impl<'a> Tmc2209<'a> {
         Ok(())
     }
 
+    // Current config.
     pub fn rms_amps(&mut self) -> (f64, f64) {
         (self.running_rms_amps, self.stopped_rms_amps)
     }
@@ -888,23 +878,6 @@ impl<'a> Tmc2209<'a> {
         let scale = self.clock_hz as f64 / (1 << 18) as f64;
         let delay = libm::round(scale * delay).clamp(0.0, 15.0) as u8;
         self.write_register(POWERDOWN_DELAY_REG, FrameData::PowerDownDelay(delay))
-    }
-
-    pub fn velocity(&mut self) -> Result<f64> {
-        let velocity = if let FrameData::Velocity(value) = self.read_register(VELOCITY_REG)? {
-            value
-        } else {
-            return Err(Tmc2209Error::InvalidResponse);
-        };
-        let pps = (velocity as f64) * 0.715;
-        Ok(pps * 60.0 / (self.pulses_per_rev()? as f64))
-    }
-
-    pub fn set_velocity(&mut self, rpm: f64) -> Result<()> {
-        let pps = (self.pulses_per_rev()? as f64) * rpm / 60.0;
-        let velocity = (pps / 0.715) as i32;
-        self.write_register(VELOCITY_REG, FrameData::Velocity(velocity))?;
-        Ok(())
     }
 
     // Step config
@@ -1249,6 +1222,34 @@ impl<'a> Tmc2209<'a> {
     // ========================
     pub fn toggle_step(&mut self) {
         self.step_pin.toggle();
+    }
+
+    pub fn invert_direction(&mut self) -> Result<bool> {
+        Ok(self.global_config()?.invert_direction)
+    }
+
+    pub fn set_invert_direction(&mut self, enable: bool) -> Result<()> {
+        let mut config = self.global_config()?;
+        config.invert_direction = enable;
+        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
+        Ok(())
+    }
+
+    pub fn velocity(&mut self) -> Result<f64> {
+        let velocity = if let FrameData::Velocity(value) = self.read_register(VELOCITY_REG)? {
+            value
+        } else {
+            return Err(Tmc2209Error::InvalidResponse);
+        };
+        let pps = (velocity as f64) * 0.715;
+        Ok(pps * 60.0 / (self.pulses_per_rev()? as f64))
+    }
+
+    pub fn set_velocity(&mut self, rpm: f64) -> Result<()> {
+        let pps = (self.pulses_per_rev()? as f64) * rpm / 60.0;
+        let velocity = (pps / 0.715) as i32;
+        self.write_register(VELOCITY_REG, FrameData::Velocity(velocity))?;
+        Ok(())
     }
 
     // ========================
