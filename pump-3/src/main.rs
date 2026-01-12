@@ -13,7 +13,7 @@ mod usb;
 use crate::{
     flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType},
     tmc2209::{
-        BlankTime, FreewheelMode, OvertemperatureStatus, PhaseStatus, PwmFrequency,
+        BlankTime, OvertemperatureStatus, PhaseStatus, PwmFrequency, StopMode,
         TemperatureThreshold, Tmc2209,
     },
     usb::PacketStream,
@@ -56,8 +56,6 @@ const GET_POWERDOWN_DELAY_S: u8 = 0x12;
 const SET_POWERDOWN_DELAY_S: u8 = 0x13;
 const GET_MICROSTEPS: u8 = 0x14;
 const SET_MICROSTEPS: u8 = 0x15;
-const GET_STEPS_PER_REV: u8 = 0x16;
-const SET_STEPS_PER_REV: u8 = 0x17;
 const GET_FILTER_STEP_PULSES: u8 = 0x18;
 const SET_FILTER_STEP_PULSES: u8 = 0x19;
 const GET_DOUBLE_EDGE_STEP: u8 = 0x1A;
@@ -114,7 +112,6 @@ const GET_CHARGE_PUMP_UNDERVOLTAGE: u8 = 0x4C;
 const GET_DRIVER_ERROR: u8 = 0x4D;
 const GET_IS_RESET: u8 = 0x4E;
 const GET_TRANSMISSION_COUNT: u8 = 0x4F;
-const GET_VERSION: u8 = 0x50;
 const GET_DIRECTION_PIN: u8 = 0x51;
 const GET_DISABLE_PWM_PIN: u8 = 0x52;
 const GET_STEP_PIN: u8 = 0x53;
@@ -167,7 +164,7 @@ enum Request {
     GetStopMode,
 
     #[deku(id = "SET_STOP_MODE")]
-    SetStopMode(FreewheelMode),
+    SetStopMode(StopMode),
 
     #[deku(id = "GET_POWERDOWN_DURATION_S")]
     GetPowerdownDurationS,
@@ -186,12 +183,6 @@ enum Request {
 
     #[deku(id = "SET_MICROSTEPS")]
     SetMicrosteps(u16),
-
-    #[deku(id = "GET_STEPS_PER_REV")]
-    GetStepsPerRev,
-
-    #[deku(id = "SET_STEPS_PER_REV")]
-    SetStepsPerRev(u32),
 
     #[deku(id = "GET_FILTER_STEP_PULSES")]
     GetFilterStepPulses,
@@ -361,9 +352,6 @@ enum Request {
     #[deku(id = "GET_TRANSMISSION_COUNT")]
     GetTransmissionCount,
 
-    #[deku(id = "GET_VERSION")]
-    GetVersion,
-
     #[deku(id = "GET_DIRECTION_PIN")]
     GetDirectionPin,
 
@@ -469,12 +457,6 @@ enum Response {
 
     #[deku(id = "SET_MICROSTEPS")]
     SetMicrosteps,
-
-    #[deku(id = "GET_STEPS_PER_REV")]
-    GetStepsPerRev(u32),
-
-    #[deku(id = "SET_STEPS_PER_REV")]
-    SetStepsPerRev,
 
     #[deku(id = "GET_FILTER_STEP_PULSES")]
     GetFilterStepPulses(bool),
@@ -643,9 +625,6 @@ enum Response {
 
     #[deku(id = "GET_TRANSMISSION_COUNT")]
     GetTransmissionCount(u8),
-
-    #[deku(id = "GET_VERSION")]
-    GetVersion(u8),
 
     #[deku(id = "GET_DIRECTION_PIN")]
     GetDirectionPin(bool),
@@ -873,13 +852,6 @@ async fn handle_request<'a>(
         Request::SetMicrosteps(n) => {
             tmc.lock(|x| x.borrow_mut().set_microsteps(n))?;
             Response::SetMicrosteps
-        }
-        Request::GetStepsPerRev => {
-            Response::GetStepsPerRev(tmc.lock(|x| x.borrow_mut().steps_per_rev()))
-        }
-        Request::SetStepsPerRev(steps) => {
-            tmc.lock(|x| x.borrow_mut().set_steps_per_rev(steps));
-            Response::SetStepsPerRev
         }
         Request::GetFilterStepPulses => {
             Response::GetFilterStepPulses(tmc.lock(|x| x.borrow_mut().filter_step_pulses())?)

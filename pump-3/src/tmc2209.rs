@@ -728,11 +728,12 @@ impl<'a> Tmc2209<'a> {
             },
             */
         };
-        // tmc.set_running_amps(0.150).unwrap();
         let mut config = tmc.global_config()?;
         config.test_mode = false;
         config.pin_uart_mode = true;
+        config.disable_pwm = true;
         config.internal_sense_resistor = true;
+        config.external_current_scaling = false;
         tmc.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
         Ok(tmc)
     }
@@ -821,11 +822,9 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn set_stopped_rms_amps(&mut self, amps: f64) -> Result<()> {
-        let mut global_config = self.global_config()?;
         let mut scale = self.ref_volt_scale / (32.0 * 1.4142 * (self.sense_ohms + 0.02));
 
-        let mut driver_config = self.driver_config()?;
-        scale *= if driver_config.low_sense_resistor_voltage {
+        scale *= if self.driver_config().low_sense_resistor_voltage {
             0.325
         } else {
             0.180
@@ -907,6 +906,7 @@ impl<'a> Tmc2209<'a> {
 
     // Step config
     pub fn microsteps(&mut self) -> Result<u16> {
+        // This register gets autoupdated based on uart_selects_microsteps.
         Ok(self.driver_config()?.microstep_resolution.into())
     }
 
