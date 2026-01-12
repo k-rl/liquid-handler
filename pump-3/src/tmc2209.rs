@@ -527,7 +527,7 @@ struct PwmConfig {
     #[deku(bits = 4)]
     max_amplitude_change: u8,
     #[deku(pad_bits_before = "2")]
-    freewheel_mode: FreewheelMode,
+    stop_mode: StopMode,
     #[deku(bits = 1)]
     autogradient: bool,
     #[deku(bits = 1)]
@@ -562,7 +562,7 @@ pub enum PwmFrequency {
     ctx = "endian: deku::ctx::Endian",
     endian = "endian"
 )]
-pub enum FreewheelMode {
+pub enum StopMode {
     #[deku(id = 0b00)]
     Normal,
     #[deku(id = 0b01)]
@@ -642,6 +642,8 @@ pub struct Tmc2209<'a> {
     running_rms_amps: f64,
     stopped_rms_amps: f64,
     clock_hz: u64,
+    sense_ohms: f64,
+    ref_volt_scale: f64,
 }
 
 impl<'a> Tmc2209<'a> {
@@ -670,6 +672,8 @@ impl<'a> Tmc2209<'a> {
             running_rms_amps: f64::NAN,
             stopped_rms_amps: f64::NAN,
             clock_hz: 12e9 as u64,
+            sense_ohms: 0.170,
+            ref_volt_scale: 1.0,
             /*
             global_config: GlobalConfig {
                 test_mode: false,
@@ -728,6 +732,7 @@ impl<'a> Tmc2209<'a> {
         let mut config = tmc.global_config()?;
         config.test_mode = false;
         config.pin_uart_mode = true;
+        config.internal_sense_resistor = true;
         tmc.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
         Ok(tmc)
     }
@@ -775,14 +780,6 @@ impl<'a> Tmc2209<'a> {
         Ok(())
     }
 
-    pub fn response_delay(&mut self) -> Result<u8> {
-        if let FrameData::ResponseDelay(delay) = self.read_register(RESPONSE_DELAY_REG)? {
-            Ok(delay)
-        } else {
-            Err(Tmc2209Error::InvalidResponse)
-        }
-    }
-
     pub fn set_response_delay(&mut self, delay: u8) -> Result<()> {
         assert!(
             (0..=15).contains(&delay),
@@ -793,37 +790,16 @@ impl<'a> Tmc2209<'a> {
     }
 
     // Current config.
-    pub fn rms_amps(&mut self) -> (f64, f64) {
-        (self.running_rms_amps, self.stopped_rms_amps)
+    pub fn rms_amps(&self) -> f64 {
+        self.running_rms_amps
     }
 
-    pub fn set_rms_amps(
-        &mut self,
-        running_rms_amps: f64,
-        stopped_rms_amps: f64,
-        ref_volts: f64,
-        sense_ohms: f64,
-    ) -> Result<()> {
+    pub fn set_rms_amps(&mut self, amps: f64) -> Result<()> {
         let mut global_config = self.global_config()?;
-        let sense_ohms = if sense_ohms <= 0.0 {
-            global_config.internal_sense_resistor = true;
-            0.170
-        } else {
-            global_config.internal_sense_resistor = false;
-            sense_ohms
-        };
-
-        let mut scale = 1.0 / (32.0 * 1.4142 * (sense_ohms + 0.02));
-        if ref_volts <= 0.0 {
-            global_config.external_current_scaling = false;
-        } else {
-            global_config.external_current_scaling = true;
-            scale *= ref_volts / 2.5
-        }
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
+        let mut scale = self.ref_volt_scale / (32.0 * 1.4142 * (self.sense_ohms + 0.02));
 
         let mut driver_config = self.driver_config()?;
-        if libm::fmax(running_rms_amps, stopped_rms_amps) / (scale * 0.18) > 32.0 {
+        if amps / (scale * 0.18) > 32.0 {
             driver_config.low_sense_resistor_voltage = false;
             scale *= 0.325;
         } else {
@@ -832,22 +808,70 @@ impl<'a> Tmc2209<'a> {
         }
         self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
 
-        let running_scale = libm::round(running_rms_amps / scale - 1.0).clamp(0.0, 31.0) as u8;
-        let stopped_scale = libm::round(stopped_rms_amps / scale - 1.0).clamp(0.0, 31.0) as u8;
+        let running_scale = libm::round(amps / scale - 1.0).clamp(0.0, 31.0) as u8;
         self.running_rms_amps = (running_scale as f64 + 1.0) * scale;
-        self.stopped_rms_amps = (stopped_scale as f64 + 1.0) * scale;
 
         let mut current_config = self.current_config()?;
         current_config.running_scale = running_scale;
+        self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))
+    }
+
+    pub fn stopped_rms_amps(&self) -> f64 {
+        self.stopped_rms_amps
+    }
+
+    pub fn set_stopped_rms_amps(&mut self, amps: f64) -> Result<()> {
+        let mut global_config = self.global_config()?;
+        let mut scale = self.ref_volt_scale / (32.0 * 1.4142 * (self.sense_ohms + 0.02));
+
+        let mut driver_config = self.driver_config()?;
+        scale *= if driver_config.low_sense_resistor_voltage {
+            0.325
+        } else {
+            0.180
+        };
+
+        let stopped_scale = libm::round(amps / scale - 1.0).clamp(0.0, 31.0) as u8;
+        self.stopped_rms_amps = (stopped_scale as f64 + 1.0) * scale;
+
+        let mut current_config = self.current_config()?;
         current_config.stopped_scale = stopped_scale;
         self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))
     }
 
-    pub fn stop_mode(&mut self) -> Result<FreewheelMode> {
-        Ok(self.pwm_config()?.freewheel_mode)
+    pub fn set_ref_volts(volts: f64) -> Result<()> {
+        let mut config = self.global_config()?;
+        let scale = if volts <= 0.0 {
+            config.external_current_scaling = false;
+            1.0
+        } else {
+            config.external_current_scaling = true;
+            volts / 2.5
+        };
+        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
+        self.ref_volt_scale = scale;
+        Ok(())
     }
 
-    pub fn set_stop_mode(&mut self, mode: FreewheelMode) -> Result<()> {
+    pub fn set_sense_ohms(ohms: f64) -> Result<()> {
+        let mut config = self.global_config()?;
+        let ohms = if ohms <= 0.0 {
+            config.internal_sense_resistor = true;
+            0.170
+        } else {
+            config.internal_sense_resistor = false;
+            ohms
+        };
+        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
+        self.sense_ohms = ohms;
+        Ok(())
+    }
+
+    pub fn stop_mode(&mut self) -> Result<StopMode> {
+        Ok(self.pwm_config()?.stop_mode)
+    }
+
+    pub fn set_stop_mode(&mut self, mode: StopMode) -> Result<()> {
         let mut config = self.pwm_config()?;
         config.freewheel_mode = mode;
         self.write_register(PWM_CONFIG_REG, FrameData::PwmConfig(config))?;
@@ -868,6 +892,7 @@ impl<'a> Tmc2209<'a> {
 
     pub fn powerdown_delay_s(&mut self) -> Result<f64> {
         if let FrameData::PowerDownDelay(delay) = self.read_register(POWERDOWN_DELAY_REG)? {
+            info!("Powerdown delay: {}", delay);
             Ok(delay as f64 * (1 << 18) as f64 / self.clock_hz as f64)
         } else {
             Err(Tmc2209Error::InvalidResponse)
@@ -1602,7 +1627,7 @@ impl<'a> Tmc2209<'a> {
         let mut buf = [0u8; 8];
         self.uart.read_exact(&mut buf)?;
 
-        debug!("Read response: {=[u8]:#02x}", &buf);
+        debug!("Read response: {=[u8]:#02x}", buf);
 
         // Verify CRC before parsing
         let received_crc = buf[7];
