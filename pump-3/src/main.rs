@@ -64,20 +64,6 @@ const GET_DOUBLE_EDGE_STEP: u8 = 0x1A;
 const SET_DOUBLE_EDGE_STEP: u8 = 0x1B;
 const GET_INTERPOLATE_MICROSTEPS: u8 = 0x1C;
 const SET_INTERPOLATE_MICROSTEPS: u8 = 0x1D;
-const GET_COOLSTEP_THRESHOLD: u8 = 0x1E;
-const SET_COOLSTEP_THRESHOLD: u8 = 0x1F;
-const GET_STALLGUARD_THRESHOLD: u8 = 0x20;
-const SET_STALLGUARD_THRESHOLD: u8 = 0x21;
-const GET_COOLSTEP_LOWER_MIN_CURRENT: u8 = 0x22;
-const SET_COOLSTEP_LOWER_MIN_CURRENT: u8 = 0x23;
-const GET_COOLSTEP_CURRENT_DOWNSTEP_RATE: u8 = 0x24;
-const SET_COOLSTEP_CURRENT_DOWNSTEP_RATE: u8 = 0x25;
-const GET_STALLGUARD_HYSTERESIS: u8 = 0x26;
-const SET_STALLGUARD_HYSTERESIS: u8 = 0x27;
-const GET_CURRENT_UPSTEP: u8 = 0x28;
-const SET_CURRENT_UPSTEP: u8 = 0x29;
-const GET_COOLSTEP_STALLGUARD_THRESHOLD: u8 = 0x2A;
-const SET_COOLSTEP_STALLGUARD_THRESHOLD: u8 = 0x2B;
 const GET_SHORT_SUPPLY_PROTECT: u8 = 0x2C;
 const SET_SHORT_SUPPLY_PROTECT: u8 = 0x2D;
 const GET_SHORT_GROUND_PROTECT: u8 = 0x2E;
@@ -106,14 +92,9 @@ const GET_PWM_GRADIENT: u8 = 0x44;
 const SET_PWM_GRADIENT: u8 = 0x45;
 const GET_PWM_OFFSET: u8 = 0x46;
 const SET_PWM_OFFSET: u8 = 0x47;
-const GET_INVERT_DIRECTION: u8 = 0x48;
-const SET_INVERT_DIRECTION: u8 = 0x49;
-const GET_VELOCITY: u8 = 0x4A;
-const SET_VELOCITY: u8 = 0x4B;
 const GET_CHARGE_PUMP_UNDERVOLTAGE: u8 = 0x4C;
 const GET_DRIVER_ERROR: u8 = 0x4D;
 const GET_IS_RESET: u8 = 0x4E;
-const GET_TRANSMISSION_COUNT: u8 = 0x4F;
 const GET_DIRECTION_PIN: u8 = 0x51;
 const GET_DISABLE_PWM_PIN: u8 = 0x52;
 const GET_STEP_PIN: u8 = 0x53;
@@ -205,48 +186,6 @@ enum Request {
     #[deku(id = "SET_INTERPOLATE_MICROSTEPS")]
     SetInterpolateMicrosteps(bool),
 
-    #[deku(id = "GET_COOLSTEP_THRESHOLD")]
-    GetCoolstepThreshold,
-
-    #[deku(id = "SET_COOLSTEP_THRESHOLD")]
-    SetCoolstepThreshold(u32),
-
-    #[deku(id = "GET_STALLGUARD_THRESHOLD")]
-    GetStallguardThreshold,
-
-    #[deku(id = "SET_STALLGUARD_THRESHOLD")]
-    SetStallguardThreshold(u8),
-
-    #[deku(id = "GET_COOLSTEP_LOWER_MIN_CURRENT")]
-    GetCoolstepLowerMinCurrent,
-
-    #[deku(id = "SET_COOLSTEP_LOWER_MIN_CURRENT")]
-    SetCoolstepLowerMinCurrent(bool),
-
-    #[deku(id = "GET_COOLSTEP_CURRENT_DOWNSTEP_RATE")]
-    GetCoolstepCurrentDownstepRate,
-
-    #[deku(id = "SET_COOLSTEP_CURRENT_DOWNSTEP_RATE")]
-    SetCoolstepCurrentDownstepRate(u8),
-
-    #[deku(id = "GET_STALLGUARD_HYSTERESIS")]
-    GetStallguardHysteresis,
-
-    #[deku(id = "SET_STALLGUARD_HYSTERESIS")]
-    SetStallguardHysteresis(u8),
-
-    #[deku(id = "GET_CURRENT_UPSTEP")]
-    GetCurrentUpstep,
-
-    #[deku(id = "SET_CURRENT_UPSTEP")]
-    SetCurrentUpstep(u8),
-
-    #[deku(id = "GET_COOLSTEP_STALLGUARD_THRESHOLD")]
-    GetCoolstepStallguardThreshold,
-
-    #[deku(id = "SET_COOLSTEP_STALLGUARD_THRESHOLD")]
-    SetCoolstepStallguardThreshold(u8),
-
     #[deku(id = "GET_SHORT_SUPPLY_PROTECT")]
     GetShortSupplyProtect,
 
@@ -331,18 +270,6 @@ enum Request {
     #[deku(id = "SET_PWM_OFFSET")]
     SetPwmOffset(u8),
 
-    #[deku(id = "GET_INVERT_DIRECTION")]
-    GetInvertDirection,
-
-    #[deku(id = "SET_INVERT_DIRECTION")]
-    SetInvertDirection(bool),
-
-    #[deku(id = "GET_VELOCITY")]
-    GetVelocity,
-
-    #[deku(id = "SET_VELOCITY")]
-    SetVelocity(f64),
-
     #[deku(id = "GET_CHARGE_PUMP_UNDERVOLTAGE")]
     GetChargePumpUndervoltage,
 
@@ -351,9 +278,6 @@ enum Request {
 
     #[deku(id = "GET_IS_RESET")]
     GetIsReset,
-
-    #[deku(id = "GET_TRANSMISSION_COUNT")]
-    GetTransmissionCount,
 
     #[deku(id = "GET_DIRECTION_PIN")]
     GetDirectionPin,
@@ -485,48 +409,6 @@ enum Response {
     #[deku(id = "SET_INTERPOLATE_MICROSTEPS")]
     SetInterpolateMicrosteps,
 
-    #[deku(id = "GET_COOLSTEP_THRESHOLD")]
-    GetCoolstepThreshold(u32),
-
-    #[deku(id = "SET_COOLSTEP_THRESHOLD")]
-    SetCoolstepThreshold,
-
-    #[deku(id = "GET_STALLGUARD_THRESHOLD")]
-    GetStallguardThreshold(u8),
-
-    #[deku(id = "SET_STALLGUARD_THRESHOLD")]
-    SetStallguardThreshold,
-
-    #[deku(id = "GET_COOLSTEP_LOWER_MIN_CURRENT")]
-    GetCoolstepLowerMinCurrent(bool),
-
-    #[deku(id = "SET_COOLSTEP_LOWER_MIN_CURRENT")]
-    SetCoolstepLowerMinCurrent,
-
-    #[deku(id = "GET_COOLSTEP_CURRENT_DOWNSTEP_RATE")]
-    GetCoolstepCurrentDownstepRate(u8),
-
-    #[deku(id = "SET_COOLSTEP_CURRENT_DOWNSTEP_RATE")]
-    SetCoolstepCurrentDownstepRate,
-
-    #[deku(id = "GET_STALLGUARD_HYSTERESIS")]
-    GetStallguardHysteresis(u8),
-
-    #[deku(id = "SET_STALLGUARD_HYSTERESIS")]
-    SetStallguardHysteresis,
-
-    #[deku(id = "GET_CURRENT_UPSTEP")]
-    GetCurrentUpstep(u8),
-
-    #[deku(id = "SET_CURRENT_UPSTEP")]
-    SetCurrentUpstep,
-
-    #[deku(id = "GET_COOLSTEP_STALLGUARD_THRESHOLD")]
-    GetCoolstepStallguardThreshold(u8),
-
-    #[deku(id = "SET_COOLSTEP_STALLGUARD_THRESHOLD")]
-    SetCoolstepStallguardThreshold,
-
     #[deku(id = "GET_SHORT_SUPPLY_PROTECT")]
     GetShortSupplyProtect(bool),
 
@@ -611,18 +493,6 @@ enum Response {
     #[deku(id = "SET_PWM_OFFSET")]
     SetPwmOffset,
 
-    #[deku(id = "GET_INVERT_DIRECTION")]
-    GetInvertDirection(bool),
-
-    #[deku(id = "SET_INVERT_DIRECTION")]
-    SetInvertDirection,
-
-    #[deku(id = "GET_VELOCITY")]
-    GetVelocity(f64),
-
-    #[deku(id = "SET_VELOCITY")]
-    SetVelocity,
-
     #[deku(id = "GET_CHARGE_PUMP_UNDERVOLTAGE")]
     GetChargePumpUndervoltage(bool),
 
@@ -631,9 +501,6 @@ enum Response {
 
     #[deku(id = "GET_IS_RESET")]
     GetIsReset(bool),
-
-    #[deku(id = "GET_TRANSMISSION_COUNT")]
-    GetTransmissionCount(u8),
 
     #[deku(id = "GET_DIRECTION_PIN")]
     GetDirectionPin(bool),
@@ -893,55 +760,6 @@ async fn handle_request<'a>(
             tmc.lock(|x| x.borrow_mut().set_interpolate_microsteps(enable))?;
             Response::SetInterpolateMicrosteps
         }
-        Request::GetCoolstepThreshold => {
-            Response::GetCoolstepThreshold(tmc.lock(|x| x.borrow_mut().coolstep_threshold())?)
-        }
-        Request::SetCoolstepThreshold(threshold) => {
-            tmc.lock(|x| x.borrow_mut().set_coolstep_threshold(threshold))?;
-            Response::SetCoolstepThreshold
-        }
-        Request::GetStallguardThreshold => {
-            Response::GetStallguardThreshold(tmc.lock(|x| x.borrow_mut().stallguard_threshold())?)
-        }
-        Request::SetStallguardThreshold(threshold) => {
-            tmc.lock(|x| x.borrow_mut().set_stallguard_threshold(threshold))?;
-            Response::SetStallguardThreshold
-        }
-        Request::GetCoolstepLowerMinCurrent => Response::GetCoolstepLowerMinCurrent(
-            tmc.lock(|x| x.borrow_mut().coolstep_lower_min_current())?,
-        ),
-        Request::SetCoolstepLowerMinCurrent(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_coolstep_lower_min_current(enable))?;
-            Response::SetCoolstepLowerMinCurrent
-        }
-        Request::GetCoolstepCurrentDownstepRate => Response::GetCoolstepCurrentDownstepRate(
-            tmc.lock(|x| x.borrow_mut().coolstep_current_downstep_rate())?,
-        ),
-        Request::SetCoolstepCurrentDownstepRate(rate) => {
-            tmc.lock(|x| x.borrow_mut().set_coolstep_current_downstep_rate(rate))?;
-            Response::SetCoolstepCurrentDownstepRate
-        }
-        Request::GetStallguardHysteresis => {
-            Response::GetStallguardHysteresis(tmc.lock(|x| x.borrow_mut().stallguard_hysteresis())?)
-        }
-        Request::SetStallguardHysteresis(hysteresis) => {
-            tmc.lock(|x| x.borrow_mut().set_stallguard_hysteresis(hysteresis))?;
-            Response::SetStallguardHysteresis
-        }
-        Request::GetCurrentUpstep => {
-            Response::GetCurrentUpstep(tmc.lock(|x| x.borrow_mut().current_upstep())?)
-        }
-        Request::SetCurrentUpstep(upstep) => {
-            tmc.lock(|x| x.borrow_mut().set_current_upstep(upstep))?;
-            Response::SetCurrentUpstep
-        }
-        Request::GetCoolstepStallguardThreshold => Response::GetCoolstepStallguardThreshold(
-            tmc.lock(|x| x.borrow_mut().coolstep_stallguard_threshold())?,
-        ),
-        Request::SetCoolstepStallguardThreshold(threshold) => {
-            tmc.lock(|x| x.borrow_mut().set_coolstep_stallguard_threshold(threshold))?;
-            Response::SetCoolstepStallguardThreshold
-        }
         Request::GetShortSupplyProtect => {
             Response::GetShortSupplyProtect(tmc.lock(|x| x.borrow_mut().short_supply_protect())?)
         }
@@ -1034,18 +852,6 @@ async fn handle_request<'a>(
             tmc.lock(|x| x.borrow_mut().set_pwm_offset(offset))?;
             Response::SetPwmOffset
         }
-        Request::GetInvertDirection => {
-            Response::GetInvertDirection(tmc.lock(|x| x.borrow_mut().invert_direction())?)
-        }
-        Request::SetInvertDirection(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_invert_direction(enable))?;
-            Response::SetInvertDirection
-        }
-        Request::GetVelocity => Response::GetVelocity(tmc.lock(|x| x.borrow_mut().velocity())?),
-        Request::SetVelocity(rpm) => {
-            tmc.lock(|x| x.borrow_mut().set_velocity(rpm))?;
-            Response::SetVelocity
-        }
         Request::GetChargePumpUndervoltage => Response::GetChargePumpUndervoltage(
             tmc.lock(|x| x.borrow_mut().charge_pump_undervoltage())?,
         ),
@@ -1053,9 +859,6 @@ async fn handle_request<'a>(
             Response::GetDriverError(tmc.lock(|x| x.borrow_mut().driver_error())?)
         }
         Request::GetIsReset => Response::GetIsReset(tmc.lock(|x| x.borrow_mut().is_reset())?),
-        Request::GetTransmissionCount => {
-            Response::GetTransmissionCount(tmc.lock(|x| x.borrow_mut().transmission_count())?)
-        }
         Request::GetDirectionPin => {
             Response::GetDirectionPin(tmc.lock(|x| x.borrow_mut().direction_pin())?)
         }
