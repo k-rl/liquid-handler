@@ -48,6 +48,8 @@ const SET_PUMP_RPM: u8 = 0x02;
 const GET_PUMP_RPM: u8 = 0x03;
 const GET_RMS_AMPS: u8 = 0x0C;
 const SET_RMS_AMPS: u8 = 0x0D;
+const GET_STOPPED_RMS_AMPS: u8 = 0x70;
+const SET_STOPPED_RMS_AMPS: u8 = 0x71;
 const GET_STOP_MODE: u8 = 0x0E;
 const SET_STOP_MODE: u8 = 0x0F;
 const GET_POWERDOWN_DURATION_S: u8 = 0x10;
@@ -153,18 +155,19 @@ enum Request {
     GetRmsAmps,
 
     #[deku(id = "SET_RMS_AMPS")]
-    SetRmsAmps {
-        running_rms_amps: f64,
-        stopped_rms_amps: f64,
-        ref_volts: f64,
-        sense_ohms: f64,
-    },
+    SetRmsAmps(f64),
+
+    #[deku(id = "GET_STOPPED_RMS_AMPS")]
+    GetStoppedRmsAmps,
+
+    #[deku(id = "SET_STOPPED_RMS_AMPS")]
+    SetStoppedRmsAmps(f64),
 
     #[deku(id = "GET_STOP_MODE")]
     GetStopMode,
 
     #[deku(id = "SET_STOP_MODE")]
-    SetStopMode(StopMode),
+    SetStopMode(#[deku(bits = 8)] StopMode),
 
     #[deku(id = "GET_POWERDOWN_DURATION_S")]
     GetPowerdownDurationS,
@@ -429,13 +432,19 @@ enum Response {
     GetPumpRpm(f64),
 
     #[deku(id = "GET_RMS_AMPS")]
-    GetRmsAmps(f64, f64),
+    GetRmsAmps(f64),
 
     #[deku(id = "SET_RMS_AMPS")]
     SetRmsAmps,
 
+    #[deku(id = "GET_STOPPED_RMS_AMPS")]
+    GetStoppedRmsAmps(f64),
+
+    #[deku(id = "SET_STOPPED_RMS_AMPS")]
+    SetStoppedRmsAmps,
+
     #[deku(id = "GET_STOP_MODE")]
-    GetStopMode(FreewheelMode),
+    GetStopMode(#[deku(bits = 8)] StopMode),
 
     #[deku(id = "SET_STOP_MODE")]
     SetStopMode,
@@ -735,17 +744,17 @@ async fn main(spawner: Spawner) -> ! {
     watchdog.enable();
     spawner.spawn(run_watchdog_monitor(watchdog)).unwrap();
 
-    let tmc: TmcMutex = Arc::new(Mutex::new(RefCell::new(
-        Tmc2209::new(
-            peripherals.UART1,
-            peripherals.GPIO13, // TX
-            peripherals.GPIO10, // RX
-            peripherals.GPIO9,  // STEP
-            peripherals.GPIO8,  // DIR
-            peripherals.GPIO7,  // ENABLE
-        )
-        .unwrap(),
-    )));
+    let mut tmc = Tmc2209::new(
+        peripherals.UART1,
+        peripherals.GPIO13, // TX
+        peripherals.GPIO10, // RX
+        peripherals.GPIO9,  // STEP
+        peripherals.GPIO8,  // DIR
+        peripherals.GPIO7,  // ENABLE
+    )
+    .unwrap();
+    tmc.set_sense_ohms(0.110).unwrap();
+    let tmc: TmcMutex = Arc::new(Mutex::new(RefCell::new(tmc)));
     let irc = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     static mut STACK: Stack<8192> = Stack::new();
     let tmc_ref = Arc::clone(&tmc);
@@ -807,28 +816,21 @@ async fn handle_request<'a>(
             Response::SetPumpRpm
         }
         Request::GetPumpRpm => Response::GetPumpRpm(RPM.lock(|x| *x.borrow())),
-        Request::GetRmsAmps => {
-            let (run, stop) = tmc.lock(|x| x.borrow_mut().rms_amps());
-            Response::GetRmsAmps(run, stop)
-        }
-        Request::SetRmsAmps {
-            running_rms_amps,
-            stopped_rms_amps,
-            ref_volts,
-            sense_ohms,
-        } => {
-            tmc.lock(|x| {
-                x.borrow_mut().set_rms_amps(
-                    running_rms_amps,
-                    stopped_rms_amps,
-                    ref_volts,
-                    sense_ohms,
-                )
-            })?;
+        Request::GetRmsAmps => Response::GetRmsAmps(tmc.lock(|x| x.borrow_mut().rms_amps())?),
+        Request::SetRmsAmps(amps) => {
+            tmc.lock(|x| x.borrow_mut().set_rms_amps(amps))?;
             Response::SetRmsAmps
+        }
+        Request::GetStoppedRmsAmps => {
+            Response::GetStoppedRmsAmps(tmc.lock(|x| x.borrow_mut().stopped_rms_amps())?)
+        }
+        Request::SetStoppedRmsAmps(amps) => {
+            tmc.lock(|x| x.borrow_mut().set_stopped_rms_amps(amps))?;
+            Response::SetStoppedRmsAmps
         }
         Request::GetStopMode => Response::GetStopMode(tmc.lock(|x| x.borrow_mut().stop_mode())?),
         Request::SetStopMode(mode) => {
+            info!("{}", mode);
             tmc.lock(|x| x.borrow_mut().set_stop_mode(mode))?;
             Response::SetStopMode
         }
@@ -1037,7 +1039,6 @@ async fn handle_request<'a>(
         Request::GetTransmissionCount => {
             Response::GetTransmissionCount(tmc.lock(|x| x.borrow_mut().transmission_count())?)
         }
-        Request::GetVersion => Response::GetVersion(tmc.lock(|x| x.borrow_mut().version())?),
         Request::GetDirectionPin => {
             Response::GetDirectionPin(tmc.lock(|x| x.borrow_mut().direction_pin())?)
         }

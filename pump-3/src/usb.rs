@@ -66,7 +66,7 @@ impl<'a> PacketStream<'a> {
             out.push(0);
         }
 
-        info!("Sending response: {=[?]}", &out[..]);
+        info!("Raw response: {=[?]}", &out[..]);
         Write::write_all(&mut self.usb, &out).await.unwrap()
     }
 

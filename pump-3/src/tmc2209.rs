@@ -527,6 +527,7 @@ struct PwmConfig {
     #[deku(bits = 4)]
     max_amplitude_change: u8,
     #[deku(pad_bits_before = "2")]
+    #[deku(bits = 2)]
     stop_mode: StopMode,
     #[deku(bits = 1)]
     autogradient: bool,
@@ -558,9 +559,9 @@ pub enum PwmFrequency {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
-    bits = 2,
-    ctx = "endian: deku::ctx::Endian",
-    endian = "endian"
+    ctx = "endian: deku::ctx::Endian, bits: deku::ctx::BitSize",
+    endian = "endian",
+    bits = "bits.0"
 )]
 pub enum StopMode {
     #[deku(id = 0b00)]
@@ -639,11 +640,11 @@ pub struct Tmc2209<'a> {
     disable_pin: Output<'a>,
     address: u8,
     steps_per_rev: u32,
-    running_rms_amps: f64,
-    stopped_rms_amps: f64,
     clock_hz: u64,
     sense_ohms: f64,
-    ref_volt_scale: f64,
+    ref_volts: f64,
+    current_config: CurrentConfig,
+    coolstep_config: CoolstepConfig,
 }
 
 impl<'a> Tmc2209<'a> {
@@ -669,11 +670,21 @@ impl<'a> Tmc2209<'a> {
             disable_pin,
             address: 0,
             steps_per_rev: 200,
-            running_rms_amps: f64::NAN,
-            stopped_rms_amps: f64::NAN,
             clock_hz: 12e9 as u64,
             sense_ohms: 0.170,
-            ref_volt_scale: 1.0,
+            ref_volts: 0.0,
+            current_config: CurrentConfig {
+                stopped_scale: 0,
+                running_scale: 0,
+                powerdown_duration: 1,
+            },
+            coolstep_config: CoolstepConfig {
+                lower_min_current: false,
+                current_downstep_rate: 0,
+                stallguard_hysteresis: 0,
+                current_upstep: 0,
+                stallguard_threshold: 0,
+            },
             /*
             global_config: GlobalConfig {
                 test_mode: false,
@@ -735,6 +746,16 @@ impl<'a> Tmc2209<'a> {
         config.internal_sense_resistor = true;
         config.external_current_scaling = false;
         tmc.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
+
+        tmc.write_register(
+            CURRENT_CONFIG_REG,
+            FrameData::CurrentConfig(tmc.current_config),
+        )?;
+
+        let mut driver_config = tmc.driver_config()?;
+        driver_config.low_sense_resistor_voltage = true;
+        tmc.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
+
         Ok(tmc)
     }
 
@@ -791,68 +812,59 @@ impl<'a> Tmc2209<'a> {
     }
 
     // Current config.
-    pub fn rms_amps(&self) -> f64 {
-        self.running_rms_amps
+    pub fn rms_amps(&mut self) -> Result<f64> {
+        let low_sense_volts = self.driver_config()?.low_sense_resistor_voltage;
+        Ok(self.scale_to_rms_amps(self.current_config.running_scale, low_sense_volts))
     }
 
     pub fn set_rms_amps(&mut self, amps: f64) -> Result<()> {
-        let mut global_config = self.global_config()?;
-        let mut scale = self.ref_volt_scale / (32.0 * 1.4142 * (self.sense_ohms + 0.02));
-
+        // Default to lower voltage unless it'll lead to a cuttoff current scale.
+        let low_sense_volts = self.rms_amps_to_unclamped_scale(amps, true) <= 32;
         let mut driver_config = self.driver_config()?;
-        if amps / (scale * 0.18) > 32.0 {
-            driver_config.low_sense_resistor_voltage = false;
-            scale *= 0.325;
-        } else {
-            driver_config.low_sense_resistor_voltage = true;
-            scale *= 0.180;
+        self.current_config.running_scale = self.rms_amps_to_scale(amps, low_sense_volts);
+        // Make sure stopped current remains similar even if sense resistor voltage is changing,
+        // unless it's 0 since we don't want to accidentally disable zero current mode.
+        if self.current_config.stopped_scale > 0 {
+            let stopped_amps = self.scale_to_rms_amps(
+                self.current_config.stopped_scale,
+                driver_config.low_sense_resistor_voltage,
+            );
+            self.current_config.stopped_scale =
+                self.rms_amps_to_scale(stopped_amps, low_sense_volts);
         }
+
+        // Update driver config and write out all the results.
+        driver_config.low_sense_resistor_voltage = low_sense_volts;
         self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
-
-        let running_scale = libm::round(amps / scale - 1.0).clamp(0.0, 31.0) as u8;
-        self.running_rms_amps = (running_scale as f64 + 1.0) * scale;
-
-        let mut current_config = self.current_config()?;
-        current_config.running_scale = running_scale;
-        self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))
+        self.write_register(
+            CURRENT_CONFIG_REG,
+            FrameData::CurrentConfig(self.current_config),
+        )
     }
 
-    pub fn stopped_rms_amps(&self) -> f64 {
-        self.stopped_rms_amps
+    pub fn stopped_rms_amps(&mut self) -> Result<f64> {
+        let low_sense_volts = self.driver_config()?.low_sense_resistor_voltage;
+        Ok(self.scale_to_rms_amps(self.current_config.stopped_scale, low_sense_volts))
     }
 
     pub fn set_stopped_rms_amps(&mut self, amps: f64) -> Result<()> {
-        let mut scale = self.ref_volt_scale / (32.0 * 1.4142 * (self.sense_ohms + 0.02));
-
-        scale *= if self.driver_config().low_sense_resistor_voltage {
-            0.325
-        } else {
-            0.180
-        };
-
-        let stopped_scale = libm::round(amps / scale - 1.0).clamp(0.0, 31.0) as u8;
-        self.stopped_rms_amps = (stopped_scale as f64 + 1.0) * scale;
-
-        let mut current_config = self.current_config()?;
-        current_config.stopped_scale = stopped_scale;
-        self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))
+        let low_sense_volts = self.driver_config()?.low_sense_resistor_voltage;
+        self.current_config.stopped_scale = self.rms_amps_to_scale(amps, low_sense_volts);
+        self.write_register(
+            CURRENT_CONFIG_REG,
+            FrameData::CurrentConfig(self.current_config),
+        )
     }
 
-    pub fn set_ref_volts(volts: f64) -> Result<()> {
+    pub fn set_ref_volts(&mut self, volts: f64) -> Result<()> {
         let mut config = self.global_config()?;
-        let scale = if volts <= 0.0 {
-            config.external_current_scaling = false;
-            1.0
-        } else {
-            config.external_current_scaling = true;
-            volts / 2.5
-        };
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
-        self.ref_volt_scale = scale;
+        config.external_current_scaling = volts > 0.0;
+        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
+        self.ref_volts = volts;
         Ok(())
     }
 
-    pub fn set_sense_ohms(ohms: f64) -> Result<()> {
+    pub fn set_sense_ohms(&mut self, ohms: f64) -> Result<()> {
         let mut config = self.global_config()?;
         let ohms = if ohms <= 0.0 {
             config.internal_sense_resistor = true;
@@ -872,21 +884,22 @@ impl<'a> Tmc2209<'a> {
 
     pub fn set_stop_mode(&mut self, mode: StopMode) -> Result<()> {
         let mut config = self.pwm_config()?;
-        config.freewheel_mode = mode;
+        config.stop_mode = mode;
         self.write_register(PWM_CONFIG_REG, FrameData::PwmConfig(config))?;
         Ok(())
     }
 
     pub fn powerdown_duration_s(&mut self) -> Result<f64> {
-        let config = self.current_config()?;
-        Ok(config.powerdown_duration as f64 * (1 << 18) as f64 / self.clock_hz as f64)
+        Ok(self.current_config.powerdown_duration as f64 * (1 << 18) as f64 / self.clock_hz as f64)
     }
 
     pub fn set_powerdown_duration_s(&mut self, duration: f64) -> Result<()> {
-        let mut config = self.current_config()?;
         let scale = self.clock_hz as f64 / (1 << 18) as f64;
-        config.powerdown_duration = libm::round(scale * duration) as u8;
-        self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(config))
+        self.current_config.powerdown_duration = libm::round(scale * duration) as u8;
+        self.write_register(
+            CURRENT_CONFIG_REG,
+            FrameData::CurrentConfig(self.current_config),
+        )
     }
 
     pub fn powerdown_delay_s(&mut self) -> Result<f64> {
@@ -1003,55 +1016,55 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn coolstep_lower_min_current(&mut self) -> Result<bool> {
-        Ok(self.coolstep_config()?.lower_min_current)
+        Ok(self.coolstep_config.lower_min_current)
     }
 
     pub fn set_coolstep_lower_min_current(&mut self, enable: bool) -> Result<()> {
-        let mut config = self.coolstep_config()?;
+        let mut config = self.coolstep_config;
         config.lower_min_current = enable;
         self.write_register(COOLSTEP_CONFIG_REG, FrameData::CoolstepConfig(config))?;
         Ok(())
     }
 
     pub fn coolstep_current_downstep_rate(&mut self) -> Result<u8> {
-        Ok(self.coolstep_config()?.current_downstep_rate)
+        Ok(self.coolstep_config.current_downstep_rate)
     }
 
     pub fn set_coolstep_current_downstep_rate(&mut self, rate: u8) -> Result<()> {
-        let mut config = self.coolstep_config()?;
+        let mut config = self.coolstep_config;
         config.current_downstep_rate = rate;
         self.write_register(COOLSTEP_CONFIG_REG, FrameData::CoolstepConfig(config))?;
         Ok(())
     }
 
     pub fn stallguard_hysteresis(&mut self) -> Result<u8> {
-        Ok(self.coolstep_config()?.stallguard_hysteresis)
+        Ok(self.coolstep_config.stallguard_hysteresis)
     }
 
     pub fn set_stallguard_hysteresis(&mut self, hysteresis: u8) -> Result<()> {
-        let mut config = self.coolstep_config()?;
+        let mut config = self.coolstep_config;
         config.stallguard_hysteresis = hysteresis;
         self.write_register(COOLSTEP_CONFIG_REG, FrameData::CoolstepConfig(config))?;
         Ok(())
     }
 
     pub fn current_upstep(&mut self) -> Result<u8> {
-        Ok(self.coolstep_config()?.current_upstep)
+        Ok(self.coolstep_config.current_upstep)
     }
 
     pub fn set_current_upstep(&mut self, upstep: u8) -> Result<()> {
-        let mut config = self.coolstep_config()?;
+        let mut config = self.coolstep_config;
         config.current_upstep = upstep;
         self.write_register(COOLSTEP_CONFIG_REG, FrameData::CoolstepConfig(config))?;
         Ok(())
     }
 
     pub fn coolstep_stallguard_threshold(&mut self) -> Result<u8> {
-        Ok(self.coolstep_config()?.stallguard_threshold)
+        Ok(self.coolstep_config.stallguard_threshold)
     }
 
     pub fn set_coolstep_stallguard_threshold(&mut self, threshold: u8) -> Result<()> {
-        let mut config = self.coolstep_config()?;
+        let mut config = self.coolstep_config;
         config.stallguard_threshold = threshold;
         self.write_register(COOLSTEP_CONFIG_REG, FrameData::CoolstepConfig(config))?;
         Ok(())
@@ -1516,20 +1529,6 @@ impl<'a> Tmc2209<'a> {
         }
     }
 
-    fn current_config(&mut self) -> Result<CurrentConfig> {
-        match self.read_register(CURRENT_CONFIG_REG)? {
-            FrameData::CurrentConfig(config) => Ok(config),
-            _ => Err(Tmc2209Error::InvalidResponse),
-        }
-    }
-
-    fn coolstep_config(&mut self) -> Result<CoolstepConfig> {
-        match self.read_register(COOLSTEP_CONFIG_REG)? {
-            FrameData::CoolstepConfig(config) => Ok(config),
-            _ => Err(Tmc2209Error::InvalidResponse),
-        }
-    }
-
     fn driver_config(&mut self) -> Result<DriverConfig> {
         match self.read_register(DRIVER_CONFIG_REG)? {
             FrameData::DriverConfig(config) => Ok(config),
@@ -1542,6 +1541,27 @@ impl<'a> Tmc2209<'a> {
             FrameData::PwmConfig(config) => Ok(config),
             _ => Err(Tmc2209Error::InvalidResponse),
         }
+    }
+
+    fn scale_to_rms_amps(&self, scale: u8, low_sense_volts: bool) -> f64 {
+        (scale as f64 + 1.0) * self.current_multiplier(low_sense_volts)
+    }
+
+    fn rms_amps_to_scale(&self, amps: f64, low_sense_volts: bool) -> u8 {
+        self.rms_amps_to_unclamped_scale(amps, low_sense_volts)
+            .clamp(0, 31)
+    }
+
+    fn rms_amps_to_unclamped_scale(&self, amps: f64, low_sense_volts: bool) -> u8 {
+        libm::round(amps / self.current_multiplier(low_sense_volts) - 1.0) as u8
+    }
+
+    fn current_multiplier(&self, low_sense_volts: bool) -> f64 {
+        let mut multiplier = 1.0 / (32.0 * 1.4142 * (self.sense_ohms + 0.02));
+        if self.ref_volts > 0.0 {
+            multiplier *= self.ref_volts / 2.5;
+        }
+        multiplier * if low_sense_volts { 0.180 } else { 0.325 }
     }
 
     fn write_register(&mut self, register: u8, data: FrameData) -> Result<()> {
@@ -1604,7 +1624,7 @@ impl<'a> Tmc2209<'a> {
 
         debug!(
             "Reading register {:#04x}, request: {=[u8]:#02x}",
-            register, &request_buf
+            register, request_buf
         );
 
         self.uart.write_all(&request_buf)?;
@@ -1637,6 +1657,7 @@ impl<'a> Tmc2209<'a> {
         }
 
         // Parse response frame
+        use deku::DekuError;
         let (_rest, response) = ReadResponseFrame::from_bytes((&buf, 0))?;
 
         Ok(response.data)
