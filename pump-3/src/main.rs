@@ -20,7 +20,7 @@ use crate::{
 };
 use alloc::sync::Arc;
 use core::{cell::RefCell, result};
-use defmt::{info, Format};
+use defmt::{info, Debug2Format, Format};
 use deku::prelude::*;
 use embassy_executor::Spawner;
 use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, blocking_mutex::Mutex};
@@ -701,25 +701,38 @@ enum Response {
 
 #[derive(Error, Debug)]
 pub enum HandleRequestError {
-    #[error("TMC error")]
-    TmcError,
-    #[error("Flow sensor error")]
-    FlowSensorError,
+    #[error("TMC error: {error}")]
+    Tmc { error: tmc2209::Tmc2209Error },
+    #[error("Flow sensor error: {error:?}")]
+    FlowSensor { error: flow_sensor::FlowSensorError },
 }
 
 impl From<tmc2209::Tmc2209Error> for HandleRequestError {
-    fn from(_: tmc2209::Tmc2209Error) -> Self {
-        HandleRequestError::TmcError
+    fn from(error: tmc2209::Tmc2209Error) -> Self {
+        HandleRequestError::Tmc { error }
     }
 }
 
 impl From<flow_sensor::FlowSensorError> for HandleRequestError {
-    fn from(_: flow_sensor::FlowSensorError) -> Self {
-        HandleRequestError::FlowSensorError
+    fn from(error: flow_sensor::FlowSensorError) -> Self {
+        HandleRequestError::FlowSensor { error }
     }
 }
 
 type Result<T> = result::Result<T, HandleRequestError>;
+
+impl Format for HandleRequestError {
+    fn format(&self, f: defmt::Formatter) {
+        match self {
+            HandleRequestError::Tmc { error } => {
+                defmt::write!(f, "TMC error: {}", error)
+            }
+            HandleRequestError::FlowSensor { error } => {
+                defmt::write!(f, "Flow sensor error: {:?}", Debug2Format(error))
+            }
+        }
+    }
+}
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -787,18 +800,22 @@ async fn run_coordinator<'a>(
         };
 
         info!("Received packet: {=[?]}", &packet[..]);
-        let response = if let Ok((_, packet)) = Request::from_bytes((&packet, 0)) {
-            handle_request(packet, &mut sensor, &tmc)
-                .await
-                .unwrap_or(Response::Fail)
-        } else {
-            Response::Fail
+        let response = match Request::from_bytes((&packet, 0)) {
+            Ok((_, packet)) => match handle_request(packet, &mut sensor, &tmc).await {
+                Ok(response) => response,
+                Err(err) => {
+                    info!("Handle request error: {}", err);
+                    Response::Fail
+                }
+            },
+            Err(err) => {
+                info!("Failed to decode request: {:?}", Debug2Format(&err));
+                Response::Fail
+            }
         };
 
-        info!(
-            "Sending response: {=[?]}",
-            &response.to_bytes().unwrap()[..]
-        );
+        let response_bytes = response.to_bytes().unwrap();
+        info!("Sending response: {=[?]}", &response_bytes[..]);
         stream.write(&response.to_bytes().unwrap()).await;
     }
 }

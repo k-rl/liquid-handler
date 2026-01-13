@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use core::result;
-use defmt::{debug, info, Format};
+use defmt::{debug, info, Debug2Format, Format};
 use deku::ctx::BitSize;
 use deku::prelude::*;
 use embedded_io::{Read, ReadExactError, Write};
@@ -604,9 +604,11 @@ pub struct PwmState {
 #[derive(Error, Debug)]
 pub enum Tmc2209Error {
     #[error("UART read error")]
-    UartReadError,
+    UartRead(#[from] ReadExactError<IoError>),
     #[error("UART write error")]
-    UartWriteError,
+    UartWrite(#[from] IoError),
+    #[error("Deku error: {error:?}")]
+    Deku { error: deku::DekuError },
     #[error("CRC mismatch")]
     CrcMismatch,
     #[error("Invalid response")]
@@ -614,20 +616,26 @@ pub enum Tmc2209Error {
 }
 
 impl From<deku::DekuError> for Tmc2209Error {
-    fn from(_: deku::DekuError) -> Self {
-        Tmc2209Error::InvalidResponse
+    fn from(error: deku::DekuError) -> Self {
+        Tmc2209Error::Deku { error }
     }
 }
 
-impl From<ReadExactError<IoError>> for Tmc2209Error {
-    fn from(_: ReadExactError<IoError>) -> Self {
-        Tmc2209Error::UartReadError
-    }
-}
-
-impl From<IoError> for Tmc2209Error {
-    fn from(_: IoError) -> Self {
-        Tmc2209Error::UartWriteError
+impl Format for Tmc2209Error {
+    fn format(&self, f: defmt::Formatter) {
+        match self {
+            Tmc2209Error::UartRead(err) => {
+                defmt::write!(f, "UART read error: {:?}", Debug2Format(err))
+            }
+            Tmc2209Error::UartWrite(err) => {
+                defmt::write!(f, "UART write error: {:?}", Debug2Format(err))
+            }
+            Tmc2209Error::Deku { error } => {
+                defmt::write!(f, "Deku error: {:?}", Debug2Format(error))
+            }
+            Tmc2209Error::CrcMismatch => defmt::write!(f, "CRC mismatch"),
+            Tmc2209Error::InvalidResponse => defmt::write!(f, "Invalid response"),
+        }
     }
 }
 
@@ -670,7 +678,7 @@ impl<'a> Tmc2209<'a> {
             disable_pin,
             address: 0,
             steps_per_rev: 200,
-            clock_hz: 12e9 as u64,
+            clock_hz: 12e6 as u64,
             sense_ohms: 0.170,
             ref_volts: 0.0,
             current_config: CurrentConfig {
@@ -1163,11 +1171,19 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn set_pwm_max_rpm(&mut self, rpm: f64) -> Result<()> {
-        let threshold =
-            libm::round(60.0 * self.clock_hz as f64 / (255.0 * rpm * self.steps_per_rev as f64))
-                as u32;
-        self.write_register(PWM_THRESHOLD_REG, FrameData::PwmThreshold(threshold))?;
-        Ok(())
+        let mut config = self.global_config()?;
+        if rpm <= 0.0 {
+            config.disable_pwm = true;
+        } else {
+            config.disable_pwm = false;
+            let threshold = libm::round(
+                60.0 * self.clock_hz as f64 / (256.0 * rpm * self.steps_per_rev as f64),
+            ) as u32;
+            info!("{}", threshold);
+            self.write_register(PWM_THRESHOLD_REG, FrameData::PwmThreshold(threshold))?;
+        }
+
+        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))
     }
 
     pub fn driver_switch_autoscale_limit(&mut self) -> Result<u8> {
@@ -1657,7 +1673,6 @@ impl<'a> Tmc2209<'a> {
         }
 
         // Parse response frame
-        use deku::DekuError;
         let (_rest, response) = ReadResponseFrame::from_bytes((&buf, 0))?;
 
         Ok(response.data)
