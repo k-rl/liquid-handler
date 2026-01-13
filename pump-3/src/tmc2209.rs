@@ -1309,7 +1309,6 @@ impl<'a> Tmc2209<'a> {
     // ========================
     // ====Status Functions====
     // ========================
-    // Global Status
     pub fn charge_pump_undervoltage(&mut self) -> Result<bool> {
         if let FrameData::GlobalStatus(data) = self.read_register(GLOBAL_STATUS_REG)? {
             Ok(data.charge_pump_undervoltage)
