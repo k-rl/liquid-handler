@@ -213,6 +213,7 @@ struct GlobalConfig {
     uart_selects_microsteps: bool,
     #[deku(bits = 1)]
     pin_uart_mode: bool,
+    #[deku(bits = 2)]
     index_output: IndexOutput,
     #[deku(bits = 1)]
     invert_direction: bool,
@@ -227,15 +228,15 @@ struct GlobalConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
-    bits = 2,
-    ctx = "endian: deku::ctx::Endian",
-    endian = "endian"
+    ctx = "endian: deku::ctx::Endian, bits: deku::ctx::BitSize",
+    endian = "endian",
+    bits = "bits.0"
 )]
 pub enum IndexOutput {
     #[deku(id = 0b00)]
     Period,
     #[deku(id = 0b01)]
-    Overtemperature,
+    OverTemperature,
     #[deku(id = 0b10)]
     Microstep,
 }
@@ -297,7 +298,7 @@ struct PinStates {
 struct FactoryConfig {
     #[deku(pad_bits_before = "22")]
     #[deku(bits = 2)]
-    overtemperature_threshold: u8,
+    over_temperature_threshold: u8,
     #[deku(pad_bits_before = "3")]
     #[deku(bits = 5)]
     clock_frequency: u8,
@@ -349,10 +350,12 @@ struct DriverConfig {
     double_edge_step: bool,
     #[deku(bits = 1)]
     interpolate_microsteps: bool,
+    #[deku(bits = 4)]
     microstep_resolution: MicrostepResolution,
     #[deku(pad_bits_before = "6")]
     #[deku(bits = 1)]
     low_sense_resistor_voltage: bool,
+    #[deku(bits = 2)]
     blank_time: BlankTime,
     #[deku(pad_bits_before = "4")]
     #[deku(map = "|x: i8| -> result::Result<_, DekuError> { Ok(((x & 0x0F) as u8 as i8) - 3)}")]
@@ -370,9 +373,9 @@ struct DriverConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite)]
 #[deku(
     id_type = "u8",
-    bits = 4,
-    ctx = "endian: deku::ctx::Endian",
-    endian = "endian"
+    ctx = "endian: deku::ctx::Endian, bits: deku::ctx::BitSize",
+    endian = "endian",
+    bits = "bits.0"
 )]
 pub enum MicrostepResolution {
     #[deku(id = 0b1000)]
@@ -432,9 +435,9 @@ impl From<MicrostepResolution> for u16 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
-    bits = 2,
-    ctx = "endian: deku::ctx::Endian",
-    endian = "endian"
+    ctx = "endian: deku::ctx::Endian, bits: deku::ctx::BitSize",
+    endian = "endian",
+    bits = "bits.0"
 )]
 pub enum BlankTime {
     #[deku(id = 0b00)]
@@ -458,19 +461,24 @@ struct DriverStatus {
     #[deku(bits = 5)]
     current_scale: u8,
     #[deku(pad_bits_before = "4")]
+    #[deku(bits = 4)]
     temperature: TemperatureThreshold,
+    #[deku(bits = 2)]
     open_load: PhaseStatus,
+    #[deku(bits = 2)]
     low_side_short: PhaseStatus,
+    #[deku(bits = 2)]
     ground_short: PhaseStatus,
-    overtemperature: OvertemperatureStatus,
+    #[deku(bits = 2)]
+    over_temperature: OverTemperatureStatus,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
-    bits = 2,
-    ctx = "endian: deku::ctx::Endian",
-    endian = "endian"
+    ctx = "endian: deku::ctx::Endian, bits: deku::ctx::BitSize",
+    endian = "endian",
+    bits = "bits.0"
 )]
 pub enum PhaseStatus {
     #[deku(id = 0b00)]
@@ -486,9 +494,9 @@ pub enum PhaseStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
-    bits = 4,
-    ctx = "endian: deku::ctx::Endian",
-    endian = "endian"
+    ctx = "endian: deku::ctx::Endian, bits: deku::ctx::BitSize",
+    endian = "endian",
+    bits = "bits.0"
 )]
 pub enum TemperatureThreshold {
     #[deku(id = 0b0000)]
@@ -506,11 +514,11 @@ pub enum TemperatureThreshold {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
-    bits = 2,
-    ctx = "endian: deku::ctx::Endian",
-    endian = "endian"
+    ctx = "endian: deku::ctx::Endian, bits: deku::ctx::BitSize",
+    endian = "endian",
+    bits = "bits.0"
 )]
-pub enum OvertemperatureStatus {
+pub enum OverTemperatureStatus {
     #[deku(id = 0b00)]
     Normal,
     #[deku(id = 0b01)]
@@ -533,6 +541,7 @@ struct PwmConfig {
     autogradient: bool,
     #[deku(bits = 1)]
     autoscale: bool,
+    #[deku(bits = 2)]
     frequency: PwmFrequency,
     gradient: u8,
     offset: u8,
@@ -541,9 +550,9 @@ struct PwmConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DekuRead, DekuWrite, Format)]
 #[deku(
     id_type = "u8",
-    bits = 2,
-    ctx = "endian: deku::ctx::Endian",
-    endian = "endian"
+    ctx = "endian: deku::ctx::Endian, bits: deku::ctx::BitSize",
+    endian = "endian",
+    bits = "bits.0"
 )]
 pub enum PwmFrequency {
     #[deku(id = 0b00)]
@@ -1500,9 +1509,9 @@ impl<'a> Tmc2209<'a> {
         }
     }
 
-    pub fn overtemperature(&mut self) -> Result<OvertemperatureStatus> {
+    pub fn over_temperature(&mut self) -> Result<OverTemperatureStatus> {
         if let FrameData::DriverStatus(data) = self.read_register(DRIVER_STATUS_REG)? {
-            Ok(data.overtemperature)
+            Ok(data.over_temperature)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }

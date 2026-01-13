@@ -13,7 +13,7 @@ mod usb;
 use crate::{
     flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType},
     tmc2209::{
-        BlankTime, OvertemperatureStatus, PhaseStatus, PwmFrequency, StopMode,
+        BlankTime, OverTemperatureStatus, PhaseStatus, PwmFrequency, StopMode,
         TemperatureThreshold, Tmc2209,
     },
     usb::PacketStream,
@@ -41,7 +41,7 @@ use panic_rtt_target as _;
 
 extern crate alloc;
 
-// Request/response codes. Keep contiguous.
+// Request/response codes.
 const INIT: u8 = 0x00;
 const FLOW_SENSOR_INFO: u8 = 0x01;
 const SET_PUMP_RPM: u8 = 0x02;
@@ -114,7 +114,7 @@ const GET_TEMPERATURE: u8 = 0x60;
 const GET_OPEN_LOAD: u8 = 0x61;
 const GET_LOW_SIDE_SHORT: u8 = 0x62;
 const GET_GROUND_SHORT: u8 = 0x63;
-const GET_OVERTEMPERATURE: u8 = 0x64;
+const GET_OVER_TEMPERATURE: u8 = 0x64;
 const FAIL: u8 = 0xFF;
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
@@ -202,7 +202,7 @@ enum Request {
     GetBlankTime,
 
     #[deku(id = "SET_BLANK_TIME")]
-    SetBlankTime(BlankTime),
+    SetBlankTime(#[deku(bits = 8)] BlankTime),
 
     #[deku(id = "GET_HYSTERESIS_END")]
     GetHysteresisEnd,
@@ -256,7 +256,7 @@ enum Request {
     GetPwmFrequency,
 
     #[deku(id = "SET_PWM_FREQUENCY")]
-    SetPwmFrequency(PwmFrequency),
+    SetPwmFrequency(#[deku(bits = 8)] PwmFrequency),
 
     #[deku(id = "GET_PWM_GRADIENT")]
     GetPwmGradient,
@@ -336,8 +336,8 @@ enum Request {
     #[deku(id = "GET_GROUND_SHORT")]
     GetGroundShort,
 
-    #[deku(id = "GET_OVERTEMPERATURE")]
-    GetOvertemperature,
+    #[deku(id = "GET_OVER_TEMPERATURE")]
+    GetOverTemperature,
 }
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
@@ -422,7 +422,7 @@ enum Response {
     SetShortGroundProtect,
 
     #[deku(id = "GET_BLANK_TIME")]
-    GetBlankTime(BlankTime),
+    GetBlankTime(#[deku(bits = 8)] BlankTime),
 
     #[deku(id = "SET_BLANK_TIME")]
     SetBlankTime,
@@ -476,7 +476,7 @@ enum Response {
     SetPwnAutoscale,
 
     #[deku(id = "GET_PWM_FREQUENCY")]
-    GetPwmFrequency(PwmFrequency),
+    GetPwmFrequency(#[deku(bits = 8)] PwmFrequency),
 
     #[deku(id = "SET_PWM_FREQUENCY")]
     SetPwmFrequency,
@@ -548,19 +548,19 @@ enum Response {
     GetCurrentScale(u8),
 
     #[deku(id = "GET_TEMPERATURE")]
-    GetTemperature(TemperatureThreshold),
+    GetTemperature(#[deku(bits = 8)] TemperatureThreshold),
 
     #[deku(id = "GET_OPEN_LOAD")]
-    GetOpenLoad(PhaseStatus),
+    GetOpenLoad(#[deku(bits = 8)] PhaseStatus),
 
     #[deku(id = "GET_LOW_SIDE_SHORT")]
-    GetLowSideShort(PhaseStatus),
+    GetLowSideShort(#[deku(bits = 8)] PhaseStatus),
 
     #[deku(id = "GET_GROUND_SHORT")]
-    GetGroundShort(PhaseStatus),
+    GetGroundShort(#[deku(bits = 8)] PhaseStatus),
 
-    #[deku(id = "GET_OVERTEMPERATURE")]
-    GetOvertemperature(OvertemperatureStatus),
+    #[deku(id = "GET_OVER_TEMPERATURE")]
+    GetOverTemperature(#[deku(bits = 8)] OverTemperatureStatus),
 
     #[deku(id = "FAIL")]
     Fail,
@@ -907,8 +907,8 @@ async fn handle_request<'a>(
         Request::GetGroundShort => {
             Response::GetGroundShort(tmc.lock(|x| x.borrow_mut().ground_short())?)
         }
-        Request::GetOvertemperature => {
-            Response::GetOvertemperature(tmc.lock(|x| x.borrow_mut().overtemperature())?)
+        Request::GetOverTemperature => {
+            Response::GetOverTemperature(tmc.lock(|x| x.borrow_mut().over_temperature())?)
         }
     };
     Ok(response)
