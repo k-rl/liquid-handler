@@ -1313,24 +1313,43 @@ impl<'a> Tmc2209<'a> {
     // ====Status Functions====
     // ========================
     pub fn charge_pump_undervoltage(&mut self) -> Result<bool> {
-        if let FrameData::GlobalStatus(data) = self.read_register(GLOBAL_STATUS_REG)? {
-            Ok(data.charge_pump_undervoltage)
+        if let FrameData::GlobalStatus(status) = self.read_register(GLOBAL_STATUS_REG)? {
+            // No need to clear the bit here since it isn't latched.
+            Ok(status.charge_pump_undervoltage)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
     pub fn driver_error(&mut self) -> Result<bool> {
-        if let FrameData::GlobalStatus(data) = self.read_register(GLOBAL_STATUS_REG)? {
-            Ok(data.driver_error)
+        if let FrameData::GlobalStatus(status) = self.read_register(GLOBAL_STATUS_REG)? {
+            // True here means the bit gets cleared if there's no more driver errors.
+            self.write_register(
+                GLOBAL_STATUS_REG,
+                FrameData::GlobalStatus(GlobalStatus {
+                    driver_error: true,
+                    reset: false,
+                    charge_pump_undervoltage: false,
+                }),
+            )?;
+            Ok(status.driver_error)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
     }
 
     pub fn is_reset(&mut self) -> Result<bool> {
-        if let FrameData::GlobalStatus(data) = self.read_register(GLOBAL_STATUS_REG)? {
-            Ok(data.reset)
+        if let FrameData::GlobalStatus(status) = self.read_register(GLOBAL_STATUS_REG)? {
+            // True here means the bit gets cleared.
+            self.write_register(
+                GLOBAL_STATUS_REG,
+                FrameData::GlobalStatus(GlobalStatus {
+                    reset: true,
+                    driver_error: false,
+                    charge_pump_undervoltage: false,
+                }),
+            )?;
+            Ok(status.reset)
         } else {
             Err(Tmc2209Error::InvalidResponse)
         }
