@@ -703,14 +703,6 @@ impl<'a> Tmc2209<'a> {
                 stallguard_threshold: 0,
             },
             /*
-            global_config: GlobalConfig {
-                filter_step_pulses: true,
-                index_output: IndexOutput::Period,
-                invert_direction: false,
-                disable_pwm: false,
-                internal_sense_resistor: false,
-                external_current_scaling: false,
-            },
             response_delay: 3,
             powerdown_delay: 20,
             pwm_threshold: 999999,
@@ -748,13 +740,20 @@ impl<'a> Tmc2209<'a> {
             },
             */
         };
-        let mut config = tmc.global_config()?;
-        config.test_mode = false;
-        config.pin_uart_mode = true;
-        config.disable_pwm = true;
-        config.internal_sense_resistor = true;
-        config.external_current_scaling = false;
-        tmc.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
+        tmc.write_register(
+            GLOBAL_CONFIG_REG,
+            FrameData::GlobalConfig(GlobalConfig {
+                external_current_scaling: false,
+                internal_sense_resistor: true,
+                disable_pwm: false,
+                invert_direction: false,
+                index_output: IndexOutput::Period,
+                pin_uart_mode: true,
+                uart_selects_microsteps: false,
+                filter_step_pulses: true,
+                test_mode: false,
+            }),
+        )?;
 
         tmc.write_register(
             CURRENT_CONFIG_REG,
