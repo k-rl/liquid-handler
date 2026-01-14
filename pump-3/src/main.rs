@@ -820,17 +820,17 @@ async fn handle_request<'a>(
             Response::SetMaxAmplitudeChange
         }
         Request::GetPwmAutogradient => {
-            Response::GetPwmAutogradient(tmc.lock(|x| x.borrow_mut().pwm_autogradient())?)
+            Response::GetPwmAutogradient(tmc.lock(|x| x.borrow_mut().pwm_autograd())?)
         }
         Request::SetPwmAutogradient(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_pwm_autogradient(enable))?;
+            tmc.lock(|x| x.borrow_mut().set_pwm_autograd(enable))?;
             Response::SetPwmAutogradient
         }
         Request::GetPwnAutoscale => {
-            Response::GetPwnAutoscale(tmc.lock(|x| x.borrow_mut().pwn_autoscale())?)
+            Response::GetPwnAutoscale(tmc.lock(|x| x.borrow_mut().pwm_autoscale())?)
         }
         Request::SetPwnAutoscale(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_pwn_autoscale(enable))?;
+            tmc.lock(|x| x.borrow_mut().set_pwm_autoscale(enable))?;
             Response::SetPwnAutoscale
         }
         Request::GetPwmFrequency => {

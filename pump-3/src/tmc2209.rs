@@ -538,7 +538,7 @@ struct PwmConfig {
     #[deku(bits = 2)]
     stop_mode: StopMode,
     #[deku(bits = 1)]
-    autogradient: bool,
+    autograd: bool,
     #[deku(bits = 1)]
     autoscale: bool,
     #[deku(bits = 2)]
@@ -704,10 +704,7 @@ impl<'a> Tmc2209<'a> {
             },
             /*
             global_config: GlobalConfig {
-                test_mode: false,
                 filter_step_pulses: true,
-                uart_selects_microsteps: true,
-                pin_uart_mode: true,
                 index_output: IndexOutput::Period,
                 invert_direction: false,
                 disable_pwm: false,
@@ -715,11 +712,6 @@ impl<'a> Tmc2209<'a> {
                 external_current_scaling: false,
             },
             response_delay: 3,
-            current_config: CurrentConfig {
-                stopped_current_scale: 10,
-                running_current_scale: 0,
-                powerdown_time: 8,
-            },
             powerdown_delay: 20,
             pwm_threshold: 999999,
             velocity: 0,
@@ -1142,8 +1134,8 @@ impl<'a> Tmc2209<'a> {
 
     pub fn set_hysteresis_start(&mut self, start: u8) -> Result<()> {
         assert!(
-            (0..=7).contains(&start),
-            "Hysteresis start must be between 0 and 7."
+            (1..=8).contains(&start),
+            "Hysteresis start must be between 1 and 8."
         );
         let mut config = self.driver_config()?;
         config.hysteresis_start = start;
@@ -1200,6 +1192,7 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn set_driver_switch_autoscale_limit(&mut self, limit: u8) -> Result<()> {
+        // TODO: Convert this to just return an error.
         assert!(
             (0..=15).contains(&limit),
             "Autoscale limit mut be between 0 and 15."
@@ -1215,6 +1208,7 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn set_max_amplitude_change(&mut self, change: u8) -> Result<()> {
+        // TODO: Convert this to just return an error.
         assert!(
             (0..=15).contains(&change),
             "Max amplitude change must be between 0 and 15."
@@ -1225,22 +1219,22 @@ impl<'a> Tmc2209<'a> {
         Ok(())
     }
 
-    pub fn pwm_autogradient(&mut self) -> Result<bool> {
-        Ok(self.pwm_config()?.autogradient)
+    pub fn pwm_autograd(&mut self) -> Result<bool> {
+        Ok(self.pwm_config()?.autograd)
     }
 
-    pub fn set_pwm_autogradient(&mut self, enable: bool) -> Result<()> {
+    pub fn set_pwm_autograd(&mut self, enable: bool) -> Result<()> {
         let mut config = self.pwm_config()?;
-        config.autogradient = enable;
+        config.autograd = enable;
         self.write_register(PWM_CONFIG_REG, FrameData::PwmConfig(config))?;
         Ok(())
     }
 
-    pub fn pwn_autoscale(&mut self) -> Result<bool> {
+    pub fn pwm_autoscale(&mut self) -> Result<bool> {
         Ok(self.pwm_config()?.autoscale)
     }
 
-    pub fn set_pwn_autoscale(&mut self, enable: bool) -> Result<()> {
+    pub fn set_pwm_autoscale(&mut self, enable: bool) -> Result<()> {
         let mut config = self.pwm_config()?;
         config.autoscale = enable;
         self.write_register(PWM_CONFIG_REG, FrameData::PwmConfig(config))?;
