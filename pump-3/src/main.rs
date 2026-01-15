@@ -608,6 +608,14 @@ esp_bootloader_esp_idf::esp_app_desc!();
 type TmcHandle<'a> = Arc<Tmc2209<'a>>;
 
 static RPM: Mutex<CriticalSectionRawMutex, RefCell<f64>> = Mutex::new(RefCell::new(0.0));
+static FLOW_SENSOR: Mutex<CriticalSectionRawMutex, RefCell<FlowSensorInfo>> =
+    Mutex::new(RefCell::new(FlowSensorInfo {
+        air_in_line: false,
+        high_flow: false,
+        exponential_smoothing_active: false,
+        ul_per_min: 0.0,
+        degrees_c: 0.0,
+    }));
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -650,18 +658,12 @@ async fn main(spawner: Spawner) -> ! {
         move || run_tmc(tmc_ref, timers.timer1),
     );
 
-    // Initialize the sensor and coordinator.
-    let mut sensor = FlowSensor::new(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO1);
-    info!("Flow sensor initialized.");
-    sensor.start(LiquidType::Water).await.unwrap();
-    run_coordinator(peripherals.USB_DEVICE, sensor, tmc).await;
+    let sensor = FlowSensor::new(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO1);
+    spawner.spawn(run_flow_rate_monitor(sensor)).unwrap();
+    run_coordinator(peripherals.USB_DEVICE, tmc).await;
 }
 
-async fn run_coordinator<'a>(
-    device: USB_DEVICE<'a>,
-    mut sensor: FlowSensor<'a>,
-    tmc: TmcHandle<'a>,
-) -> ! {
+async fn run_coordinator<'a>(device: USB_DEVICE<'a>, tmc: TmcHandle<'a>) -> ! {
     let mut stream = PacketStream::new(device, Duration::from_secs(1));
     loop {
         let Ok(packet) = stream.read().await else {
@@ -671,7 +673,7 @@ async fn run_coordinator<'a>(
 
         info!("Received packet: {=[?]}", &packet[..]);
         let response = match Request::from_bytes((&packet, 0)) {
-            Ok((_, packet)) => match handle_request(packet, &mut sensor, &tmc).await {
+            Ok((_, packet)) => match handle_request(packet, &tmc).await {
                 Ok(response) => response,
                 Err(err) => {
                     info!("Handle request error: {}", err);
@@ -690,14 +692,10 @@ async fn run_coordinator<'a>(
     }
 }
 
-async fn handle_request<'a>(
-    packet: Request,
-    sensor: &mut FlowSensor<'a>,
-    tmc: &TmcHandle<'a>,
-) -> Result<Response> {
+async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Response> {
     let response = match packet {
         Request::Init => Response::Init,
-        Request::FlowSensorInfo => Response::FlowSensorInfo(sensor.read().await?),
+        Request::FlowSensorInfo => Response::FlowSensorInfo(FLOW_SENSOR.lock(|x| *x.borrow())),
         Request::SetPumpRpm(rpm) => {
             RPM.lock(|x| x.replace(rpm));
             Response::SetPumpRpm
@@ -871,6 +869,23 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
     }
 }
 
+#[embassy_executor::task]
+async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>) -> ! {
+    info!("Flow sensor initialized.");
+    sensor.start(LiquidType::Water).await.unwrap();
+    loop {
+        match sensor.read().await {
+            Ok(info) => {
+                FLOW_SENSOR.lock(|x| x.replace(info));
+            }
+            Err(err) => {
+                info!("Flow sensor error: {:?}", Debug2Format(&err));
+            }
+        }
+        Timer::after_millis(50).await;
+    }
+}
+
 fn run_tmc(
     tmc: TmcHandle<'static>,
     timer: impl esp_hal::timer::Timer + Into<AnyTimer<'static>>,
@@ -901,7 +916,7 @@ fn run_tmc(
             if elapsed_us >= dt {
                 j += 1;
                 tmc.toggle_step();
-                elapsed_us = 0;
+                elapsed_us %= dt;
             }
         }
         if i % 100 == 0 {

@@ -59,11 +59,11 @@ pub type Result<T> = result::Result<T, FlowSensorError>;
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
 #[deku(ctx = "endian: deku::ctx::Endian", endian = "endian")]
 pub struct FlowSensorInfo {
-    air_in_line: bool,
-    high_flow: bool,
-    exponential_smoothing_active: bool,
-    ul_per_min: f64,
-    degrees_c: f64,
+    pub air_in_line: bool,
+    pub high_flow: bool,
+    pub exponential_smoothing_active: bool,
+    pub ul_per_min: f64,
+    pub degrees_c: f64,
 }
 
 pub struct FlowSensor<'a> {
