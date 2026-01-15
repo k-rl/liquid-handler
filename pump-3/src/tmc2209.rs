@@ -7,7 +7,6 @@ use deku::prelude::*;
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use embedded_io::{Read, ReadExactError, Write};
 use esp_hal::{
-    delay::Delay,
     gpio::{
         interconnect::{PeripheralInput, PeripheralOutput},
         Level::Low,
@@ -667,6 +666,8 @@ pub struct Tmc2209<'a> {
     clock_hz: FieldMutex<u64>,
     sense_ohms: FieldMutex<f64>,
     ref_volts: FieldMutex<f64>,
+    microsteps: FieldMutex<u16>,
+    double_edge_step: FieldMutex<bool>,
     current_config: FieldMutex<CurrentConfig>,
     coolstep_config: FieldMutex<CoolstepConfig>,
 }
@@ -697,6 +698,8 @@ impl<'a> Tmc2209<'a> {
             clock_hz: Mutex::new(RefCell::new(12e6 as u64)),
             sense_ohms: Mutex::new(RefCell::new(0.170)),
             ref_volts: Mutex::new(RefCell::new(0.0)),
+            microsteps: Mutex::new(RefCell::new(8)),
+            double_edge_step: Mutex::new(RefCell::new(false)),
             current_config: Mutex::new(RefCell::new(CurrentConfig {
                 stopped_scale: 0,
                 running_scale: 0,
@@ -767,7 +770,12 @@ impl<'a> Tmc2209<'a> {
 
         let mut driver_config = tmc.driver_config()?;
         driver_config.low_sense_resistor_voltage = true;
+        driver_config.double_edge_step = false;
         tmc.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
+
+        mutate(&tmc.microsteps, |steps| {
+            *steps = driver_config.microstep_resolution.into()
+        });
 
         Ok(tmc)
     }
@@ -937,22 +945,26 @@ impl<'a> Tmc2209<'a> {
     }
 
     // Step config
-    pub fn microsteps(&self) -> Result<u16> {
-        // This register gets autoupdated based on uart_selects_microsteps.
-        Ok(self.driver_config()?.microstep_resolution.into())
+    pub fn microsteps(&self) -> u16 {
+        mutate(&self.microsteps, |steps| *steps)
     }
 
-    pub fn set_microsteps(&self, num_microsteps: u16) -> Result<()> {
+    pub fn set_microsteps(&self, mut num_microsteps: u16) -> Result<()> {
         let mut global_config = self.global_config()?;
         if num_microsteps == 0 {
             global_config.uart_selects_microsteps = false;
+            self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
+            // This register gets autoupdated based on uart_selects_microsteps.
+            let driver_config = self.driver_config()?;
+            num_microsteps = driver_config.microstep_resolution.into();
         } else {
-            global_config.uart_selects_microsteps = true;
             let mut driver_config = self.driver_config()?;
+            global_config.uart_selects_microsteps = true;
             driver_config.microstep_resolution = num_microsteps.into();
+            self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
             self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
         }
-        self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
+        mutate(&self.microsteps, |steps| *steps = num_microsteps);
         Ok(())
     }
 
@@ -975,14 +987,15 @@ impl<'a> Tmc2209<'a> {
         Ok(())
     }
 
-    pub fn double_edge_step(&self) -> Result<bool> {
-        Ok(self.driver_config()?.double_edge_step)
+    pub fn double_edge_step(&self) -> bool {
+        mutate(&self.double_edge_step, |steps| *steps)
     }
 
     pub fn set_double_edge_step(&self, enable: bool) -> Result<()> {
         let mut config = self.driver_config()?;
         config.double_edge_step = enable;
         self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(config))?;
+        mutate(&self.double_edge_step, |steps| *steps = enable);
         Ok(())
     }
 
@@ -1327,11 +1340,11 @@ impl<'a> Tmc2209<'a> {
             return Err(Tmc2209Error::InvalidResponse);
         };
         let pps = (velocity as f64) * 0.715;
-        Ok(pps * 60.0 / (self.pulses_per_rev()? as f64))
+        Ok(pps * 60.0 / (self.pulses_per_rev() as f64))
     }
 
     pub fn set_velocity(&self, rpm: f64) -> Result<()> {
-        let pps = (self.pulses_per_rev()? as f64) * rpm / 60.0;
+        let pps = (self.pulses_per_rev() as f64) * rpm / 60.0;
         let velocity = (pps / 0.715) as i32;
         self.write_register(VELOCITY_REG, FrameData::Velocity(velocity))?;
         Ok(())
@@ -1578,11 +1591,10 @@ impl<'a> Tmc2209<'a> {
         Ok(state)
     }
 
-    pub fn pulses_per_rev(&self) -> Result<u32> {
-        let msteps_per_step = u16::from(self.microsteps()?) as u32;
-        let pulses_per_mstep = if self.double_edge_step()? { 1 } else { 2 };
-        let steps_per_rev = mutate(&self.steps_per_rev, |steps| *steps);
-        Ok(pulses_per_mstep * msteps_per_step * steps_per_rev)
+    pub fn pulses_per_rev(&self) -> u32 {
+        let msteps_per_step = self.microsteps() as u32;
+        let pulses_per_mstep = if self.double_edge_step() { 1 } else { 2 };
+        pulses_per_mstep * msteps_per_step * self.steps_per_rev()
     }
 
     // ===========================
@@ -1634,12 +1646,6 @@ impl<'a> Tmc2209<'a> {
 
     fn write_register(&self, register: u8, data: FrameData) -> Result<()> {
         mutate(&self.uart, |uart| {
-            let count_before =
-                match Self::read_register_inner(uart, self.address, TRANSMISSION_COUNT_REG)? {
-                    FrameData::TransmissionCount(x) => x,
-                    _ => return Err(Tmc2209Error::InvalidResponse),
-                };
-
             let frame = WriteFrame {
                 address: self.address,
                 register,
@@ -1659,91 +1665,65 @@ impl<'a> Tmc2209<'a> {
 
             uart.write_all(&buf)?;
 
-            let delay = Delay::new();
-            delay.delay_millis(5);
-
             // Read back the echo since TX and RX are on the same line
             let mut echo = [0u8; 8];
             uart.read_exact(&mut echo)?;
 
             // Verify echo matches what we sent
             if echo != buf {
-                return Err(Tmc2209Error::InvalidResponse);
+                Err(Tmc2209Error::InvalidResponse)
+            } else {
+                Ok(())
             }
-
-            // Verify transmission count incremented
-            let count_after =
-                match Self::read_register_inner(uart, self.address, TRANSMISSION_COUNT_REG)? {
-                    FrameData::TransmissionCount(x) => x,
-                    _ => return Err(Tmc2209Error::InvalidResponse),
-                };
-            if count_after != count_before.wrapping_add(1) {
-                return Err(Tmc2209Error::InvalidResponse);
-            }
-
-            delay.delay_millis(10);
-            Ok(())
         })
     }
 
     fn read_register(&self, register: u8) -> Result<FrameData> {
         mutate(&self.uart, |uart| {
-            Self::read_register_inner(uart, self.address, register)
+            let request = ReadRequestFrame {
+                address: self.address,
+                register,
+            };
+
+            // Write request to buffer with extra byte for CRC
+            let mut request_buf = [0u8; 4];
+            let bytes = request.to_bytes()?;
+            request_buf[..3].copy_from_slice(&bytes[..3]);
+            request_buf[3] = crc8(&request_buf[0..3]);
+
+            debug!(
+                "Reading register {:#04x}, request: {=[u8]:#02x}",
+                register, request_buf
+            );
+
+            uart.write_all(&request_buf)?;
+            // Read back the echo since TX and RX are on the same line
+            let mut echo = [0u8; 4];
+            uart.read_exact(&mut echo)?;
+
+            // Verify echo matches what we sent
+            if echo != request_buf {
+                return Err(Tmc2209Error::InvalidResponse);
+            }
+
+            // Read response (8 bytes)
+            let mut buf = [0u8; 8];
+            uart.read_exact(&mut buf)?;
+
+            debug!("Read response: {=[u8]:#02x}", buf);
+
+            // Verify CRC before parsing
+            let received_crc = buf[7];
+            let calculated_crc = crc8(&buf[0..7]);
+            if received_crc != calculated_crc {
+                return Err(Tmc2209Error::CrcMismatch);
+            }
+
+            // Parse response frame
+            let (_rest, response) = ReadResponseFrame::from_bytes((&buf, 0))?;
+
+            Ok(response.data)
         })
-    }
-
-    fn read_register_inner(
-        uart: &mut Uart<'a, Blocking>,
-        address: u8,
-        register: u8,
-    ) -> Result<FrameData> {
-        // Create read request frame
-        let request = ReadRequestFrame { address, register };
-
-        // Write request to buffer with extra byte for CRC
-        let mut request_buf = [0u8; 4];
-        let bytes = request.to_bytes()?;
-        request_buf[..3].copy_from_slice(&bytes[..3]);
-        request_buf[3] = crc8(&request_buf[0..3]);
-
-        debug!(
-            "Reading register {:#04x}, request: {=[u8]:#02x}",
-            register, request_buf
-        );
-
-        uart.write_all(&request_buf)?;
-        let delay = Delay::new();
-        delay.delay_millis(10);
-
-        // Read back the echo since TX and RX are on the same line
-        let mut echo = [0u8; 4];
-        uart.read_exact(&mut echo)?;
-
-        // Verify echo matches what we sent
-        if echo != request_buf {
-            return Err(Tmc2209Error::InvalidResponse);
-        }
-
-        // Wait for response
-        delay.delay_millis(10);
-
-        // Read response (8 bytes)
-        let mut buf = [0u8; 8];
-        uart.read_exact(&mut buf)?;
-
-        debug!("Read response: {=[u8]:#02x}", buf);
-
-        // Verify CRC before parsing
-        let received_crc = buf[7];
-        let calculated_crc = crc8(&buf[0..7]);
-        if received_crc != calculated_crc {
-            return Err(Tmc2209Error::CrcMismatch);
-        }
-
-        // Parse response frame
-        let (_rest, response) = ReadResponseFrame::from_bytes((&buf, 0))?;
-
-        Ok(response.data)
     }
 }
 
