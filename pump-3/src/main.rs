@@ -603,7 +603,7 @@ impl Format for HandleRequestError {
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-type TmcMutex<'a> = Arc<Mutex<CriticalSectionRawMutex, RefCell<Tmc2209<'a>>>>;
+type TmcHandle<'a> = Arc<Tmc2209<'a>>;
 
 static RPM: Mutex<CriticalSectionRawMutex, RefCell<f64>> = Mutex::new(RefCell::new(0.0));
 
@@ -624,17 +624,18 @@ async fn main(spawner: Spawner) -> ! {
     watchdog.enable();
     spawner.spawn(run_watchdog_monitor(watchdog)).unwrap();
 
-    let mut tmc = Tmc2209::new(
-        peripherals.UART1,
-        peripherals.GPIO13, // TX
-        peripherals.GPIO10, // RX
-        peripherals.GPIO9,  // STEP
-        peripherals.GPIO8,  // DIR
-        peripherals.GPIO7,  // ENABLE
-    )
-    .unwrap();
+    let tmc = Arc::new(
+        Tmc2209::new(
+            peripherals.UART1,
+            peripherals.GPIO13, // TX
+            peripherals.GPIO10, // RX
+            peripherals.GPIO9,  // STEP
+            peripherals.GPIO8,  // DIR
+            peripherals.GPIO7,  // ENABLE
+        )
+        .unwrap(),
+    );
     tmc.set_sense_ohms(0.110).unwrap();
-    let tmc: TmcMutex = Arc::new(Mutex::new(RefCell::new(tmc)));
     let irc = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     static mut STACK: Stack<8192> = Stack::new();
     let tmc_ref = Arc::clone(&tmc);
@@ -657,7 +658,7 @@ async fn main(spawner: Spawner) -> ! {
 async fn run_coordinator<'a>(
     device: USB_DEVICE<'a>,
     mut sensor: FlowSensor<'a>,
-    tmc: TmcMutex<'a>,
+    tmc: TmcHandle<'a>,
 ) -> ! {
     let mut stream = PacketStream::new(device, Duration::from_secs(1));
     loop {
@@ -690,7 +691,7 @@ async fn run_coordinator<'a>(
 async fn handle_request<'a>(
     packet: Request,
     sensor: &mut FlowSensor<'a>,
-    tmc: &TmcMutex<'a>,
+    tmc: &TmcHandle<'a>,
 ) -> Result<Response> {
     let response = match packet {
         Request::Init => Response::Init,
@@ -700,216 +701,162 @@ async fn handle_request<'a>(
             Response::SetPumpRpm
         }
         Request::GetPumpRpm => Response::GetPumpRpm(RPM.lock(|x| *x.borrow())),
-        Request::GetRmsAmps => Response::GetRmsAmps(tmc.lock(|x| x.borrow_mut().rms_amps())?),
+        Request::GetRmsAmps => Response::GetRmsAmps(tmc.rms_amps()?),
         Request::SetRmsAmps(amps) => {
-            tmc.lock(|x| x.borrow_mut().set_rms_amps(amps))?;
+            tmc.set_rms_amps(amps)?;
             Response::SetRmsAmps
         }
-        Request::GetStoppedRmsAmps => {
-            Response::GetStoppedRmsAmps(tmc.lock(|x| x.borrow_mut().stopped_rms_amps())?)
-        }
+        Request::GetStoppedRmsAmps => Response::GetStoppedRmsAmps(tmc.stopped_rms_amps()?),
         Request::SetStoppedRmsAmps(amps) => {
-            tmc.lock(|x| x.borrow_mut().set_stopped_rms_amps(amps))?;
+            tmc.set_stopped_rms_amps(amps)?;
             Response::SetStoppedRmsAmps
         }
-        Request::GetStopMode => Response::GetStopMode(tmc.lock(|x| x.borrow_mut().stop_mode())?),
+        Request::GetStopMode => Response::GetStopMode(tmc.stop_mode()?),
         Request::SetStopMode(mode) => {
             info!("{}", mode);
-            tmc.lock(|x| x.borrow_mut().set_stop_mode(mode))?;
+            tmc.set_stop_mode(mode)?;
             Response::SetStopMode
         }
         Request::GetPowerdownDurationS => {
-            Response::GetPowerdownDurationS(tmc.lock(|x| x.borrow_mut().powerdown_duration_s())?)
+            Response::GetPowerdownDurationS(tmc.powerdown_duration_s()?)
         }
         Request::SetPowerdownDurationS(duration) => {
-            tmc.lock(|x| x.borrow_mut().set_powerdown_duration_s(duration))?;
+            tmc.set_powerdown_duration_s(duration)?;
             Response::SetPowerdownDurationS
         }
-        Request::GetPowerdownDelayS => {
-            Response::GetPowerdownDelayS(tmc.lock(|x| x.borrow_mut().powerdown_delay_s())?)
-        }
+        Request::GetPowerdownDelayS => Response::GetPowerdownDelayS(tmc.powerdown_delay_s()?),
         Request::SetPowerdownDelayS(delay) => {
-            tmc.lock(|x| x.borrow_mut().set_powerdown_delay_s(delay))?;
+            tmc.set_powerdown_delay_s(delay)?;
             Response::SetPowerdownDelayS
         }
-        Request::GetMicrosteps => {
-            Response::GetMicrosteps(tmc.lock(|x| x.borrow_mut().microsteps())?)
-        }
+        Request::GetMicrosteps => Response::GetMicrosteps(tmc.microsteps()?),
         Request::SetMicrosteps(n) => {
-            tmc.lock(|x| x.borrow_mut().set_microsteps(n))?;
+            tmc.set_microsteps(n)?;
             Response::SetMicrosteps
         }
-        Request::GetFilterStepPulses => {
-            Response::GetFilterStepPulses(tmc.lock(|x| x.borrow_mut().filter_step_pulses())?)
-        }
+        Request::GetFilterStepPulses => Response::GetFilterStepPulses(tmc.filter_step_pulses()?),
         Request::SetFilterStepPulses(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_filter_step_pulses(enable))?;
+            tmc.set_filter_step_pulses(enable)?;
             Response::SetFilterStepPulses
         }
-        Request::GetDoubleEdgeStep => {
-            Response::GetDoubleEdgeStep(tmc.lock(|x| x.borrow_mut().double_edge_step())?)
-        }
+        Request::GetDoubleEdgeStep => Response::GetDoubleEdgeStep(tmc.double_edge_step()?),
         Request::SetDoubleEdgeStep(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_double_edge_step(enable))?;
+            tmc.set_double_edge_step(enable)?;
             Response::SetDoubleEdgeStep
         }
-        Request::GetInterpolateMicrosteps => Response::GetInterpolateMicrosteps(
-            tmc.lock(|x| x.borrow_mut().interpolate_microsteps())?,
-        ),
+        Request::GetInterpolateMicrosteps => {
+            Response::GetInterpolateMicrosteps(tmc.interpolate_microsteps()?)
+        }
         Request::SetInterpolateMicrosteps(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_interpolate_microsteps(enable))?;
+            tmc.set_interpolate_microsteps(enable)?;
             Response::SetInterpolateMicrosteps
         }
         Request::GetShortSupplyProtect => {
-            Response::GetShortSupplyProtect(tmc.lock(|x| x.borrow_mut().short_supply_protect())?)
+            Response::GetShortSupplyProtect(tmc.short_supply_protect()?)
         }
         Request::SetShortSupplyProtect(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_short_supply_protect(enable))?;
+            tmc.set_short_supply_protect(enable)?;
             Response::SetShortSupplyProtect
         }
         Request::GetShortGroundProtect => {
-            Response::GetShortGroundProtect(tmc.lock(|x| x.borrow_mut().short_ground_protect())?)
+            Response::GetShortGroundProtect(tmc.short_ground_protect()?)
         }
         Request::SetShortGroundProtect(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_short_ground_protect(enable))?;
+            tmc.set_short_ground_protect(enable)?;
             Response::SetShortGroundProtect
         }
-        Request::GetBlankTime => Response::GetBlankTime(tmc.lock(|x| x.borrow_mut().blank_time())?),
+        Request::GetBlankTime => Response::GetBlankTime(tmc.blank_time()?),
         Request::SetBlankTime(time) => {
-            tmc.lock(|x| x.borrow_mut().set_blank_time(time))?;
+            tmc.set_blank_time(time)?;
             Response::SetBlankTime
         }
-        Request::GetHysteresisEnd => {
-            Response::GetHysteresisEnd(tmc.lock(|x| x.borrow_mut().hysteresis_end())?)
-        }
+        Request::GetHysteresisEnd => Response::GetHysteresisEnd(tmc.hysteresis_end()?),
         Request::SetHysteresisEnd(end) => {
-            tmc.lock(|x| x.borrow_mut().set_hysteresis_end(end))?;
+            tmc.set_hysteresis_end(end)?;
             Response::SetHysteresisEnd
         }
-        Request::GetHysteresisStart => {
-            Response::GetHysteresisStart(tmc.lock(|x| x.borrow_mut().hysteresis_start())?)
-        }
+        Request::GetHysteresisStart => Response::GetHysteresisStart(tmc.hysteresis_start()?),
         Request::SetHysteresisStart(start) => {
-            tmc.lock(|x| x.borrow_mut().set_hysteresis_start(start))?;
+            tmc.set_hysteresis_start(start)?;
             Response::SetHysteresisStart
         }
-        Request::GetDecayTime => Response::GetDecayTime(tmc.lock(|x| x.borrow_mut().decay_time())?),
+        Request::GetDecayTime => Response::GetDecayTime(tmc.decay_time()?),
         Request::SetDecayTime(time) => {
-            tmc.lock(|x| x.borrow_mut().set_decay_time(time))?;
+            tmc.set_decay_time(time)?;
             Response::SetDecayTime
         }
-        Request::GetPwmMaxRpm => {
-            Response::GetPwmMaxRpm(tmc.lock(|x| x.borrow_mut().pwm_max_rpm())?)
-        }
+        Request::GetPwmMaxRpm => Response::GetPwmMaxRpm(tmc.pwm_max_rpm()?),
         Request::SetPwmMaxRpm(rpm) => {
-            tmc.lock(|x| x.borrow_mut().set_pwm_max_rpm(rpm))?;
+            tmc.set_pwm_max_rpm(rpm)?;
             Response::SetPwmMaxRpm
         }
-        Request::GetDriverSwitchAutoscaleLimit => Response::GetDriverSwitchAutoscaleLimit(
-            tmc.lock(|x| x.borrow_mut().driver_switch_autoscale_limit())?,
-        ),
+        Request::GetDriverSwitchAutoscaleLimit => {
+            Response::GetDriverSwitchAutoscaleLimit(tmc.driver_switch_autoscale_limit()?)
+        }
         Request::SetDriverSwitchAutoscaleLimit(limit) => {
-            tmc.lock(|x| x.borrow_mut().set_driver_switch_autoscale_limit(limit))?;
+            tmc.set_driver_switch_autoscale_limit(limit)?;
             Response::SetDriverSwitchAutoscaleLimit
         }
         Request::GetMaxAmplitudeChange => {
-            Response::GetMaxAmplitudeChange(tmc.lock(|x| x.borrow_mut().max_amplitude_change())?)
+            Response::GetMaxAmplitudeChange(tmc.max_amplitude_change()?)
         }
         Request::SetMaxAmplitudeChange(change) => {
-            tmc.lock(|x| x.borrow_mut().set_max_amplitude_change(change))?;
+            tmc.set_max_amplitude_change(change)?;
             Response::SetMaxAmplitudeChange
         }
-        Request::GetPwmAutogradient => {
-            Response::GetPwmAutogradient(tmc.lock(|x| x.borrow_mut().pwm_autograd())?)
-        }
+        Request::GetPwmAutogradient => Response::GetPwmAutogradient(tmc.pwm_autograd()?),
         Request::SetPwmAutogradient(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_pwm_autograd(enable))?;
+            tmc.set_pwm_autograd(enable)?;
             Response::SetPwmAutogradient
         }
-        Request::GetPwnAutoscale => {
-            Response::GetPwnAutoscale(tmc.lock(|x| x.borrow_mut().pwm_autoscale())?)
-        }
+        Request::GetPwnAutoscale => Response::GetPwnAutoscale(tmc.pwm_autoscale()?),
         Request::SetPwnAutoscale(enable) => {
-            tmc.lock(|x| x.borrow_mut().set_pwm_autoscale(enable))?;
+            tmc.set_pwm_autoscale(enable)?;
             Response::SetPwnAutoscale
         }
-        Request::GetPwmFrequency => {
-            Response::GetPwmFrequency(tmc.lock(|x| x.borrow_mut().pwm_frequency())?)
-        }
+        Request::GetPwmFrequency => Response::GetPwmFrequency(tmc.pwm_frequency()?),
         Request::SetPwmFrequency(frequency) => {
-            tmc.lock(|x| x.borrow_mut().set_pwm_frequency(frequency))?;
+            tmc.set_pwm_frequency(frequency)?;
             Response::SetPwmFrequency
         }
-        Request::GetPwmGradient => {
-            Response::GetPwmGradient(tmc.lock(|x| x.borrow_mut().pwm_gradient())?)
-        }
+        Request::GetPwmGradient => Response::GetPwmGradient(tmc.pwm_gradient()?),
         Request::SetPwmGradient(gradient) => {
-            tmc.lock(|x| x.borrow_mut().set_pwm_gradient(gradient))?;
+            tmc.set_pwm_gradient(gradient)?;
             Response::SetPwmGradient
         }
-        Request::GetPwmOffset => Response::GetPwmOffset(tmc.lock(|x| x.borrow_mut().pwm_offset())?),
+        Request::GetPwmOffset => Response::GetPwmOffset(tmc.pwm_offset()?),
         Request::SetPwmOffset(offset) => {
-            tmc.lock(|x| x.borrow_mut().set_pwm_offset(offset))?;
+            tmc.set_pwm_offset(offset)?;
             Response::SetPwmOffset
         }
-        Request::GetChargePumpUndervoltage => Response::GetChargePumpUndervoltage(
-            tmc.lock(|x| x.borrow_mut().charge_pump_undervoltage())?,
-        ),
-        Request::GetDriverError => {
-            Response::GetDriverError(tmc.lock(|x| x.borrow_mut().driver_error())?)
+        Request::GetChargePumpUndervoltage => {
+            Response::GetChargePumpUndervoltage(tmc.charge_pump_undervoltage()?)
         }
-        Request::GetIsReset => Response::GetIsReset(tmc.lock(|x| x.borrow_mut().is_reset())?),
-        Request::GetDirectionPin => {
-            Response::GetDirectionPin(tmc.lock(|x| x.borrow_mut().direction_pin())?)
-        }
-        Request::GetDisablePwmPin => {
-            Response::GetDisablePwmPin(tmc.lock(|x| x.borrow_mut().disable_pwm_pin())?)
-        }
-        Request::GetStepPin => Response::GetStepPin(tmc.lock(|x| x.borrow_mut().step_pin())?),
-        Request::GetPowerdownUartPin => {
-            Response::GetPowerdownUartPin(tmc.lock(|x| x.borrow_mut().powerdown_uart_pin())?)
-        }
-        Request::GetDiagnosticPin => {
-            Response::GetDiagnosticPin(tmc.lock(|x| x.borrow_mut().diagnostic_pin())?)
-        }
-        Request::GetMicrostep2Pin => {
-            Response::GetMicrostep2Pin(tmc.lock(|x| x.borrow_mut().microstep2_pin())?)
-        }
-        Request::GetMicrostep1Pin => {
-            Response::GetMicrostep1Pin(tmc.lock(|x| x.borrow_mut().microstep1_pin())?)
-        }
-        Request::GetDisablePin => {
-            Response::GetDisablePin(tmc.lock(|x| x.borrow_mut().disable_pin())?)
-        }
-        Request::GetMicrostepTime => {
-            Response::GetMicrostepTime(tmc.lock(|x| x.borrow_mut().microstep_time())?)
-        }
-        Request::GetMotorLoad => Response::GetMotorLoad(tmc.lock(|x| x.borrow_mut().motor_load())?),
-        Request::GetMicrostepPosition => {
-            Response::GetMicrostepPosition(tmc.lock(|x| x.borrow_mut().microstep_position())?)
-        }
+        Request::GetDriverError => Response::GetDriverError(tmc.driver_error()?),
+        Request::GetIsReset => Response::GetIsReset(tmc.is_reset()?),
+        Request::GetDirectionPin => Response::GetDirectionPin(tmc.direction_pin()?),
+        Request::GetDisablePwmPin => Response::GetDisablePwmPin(tmc.disable_pwm_pin()?),
+        Request::GetStepPin => Response::GetStepPin(tmc.step_pin()?),
+        Request::GetPowerdownUartPin => Response::GetPowerdownUartPin(tmc.powerdown_uart_pin()?),
+        Request::GetDiagnosticPin => Response::GetDiagnosticPin(tmc.diagnostic_pin()?),
+        Request::GetMicrostep2Pin => Response::GetMicrostep2Pin(tmc.microstep2_pin()?),
+        Request::GetMicrostep1Pin => Response::GetMicrostep1Pin(tmc.microstep1_pin()?),
+        Request::GetDisablePin => Response::GetDisablePin(tmc.disable_pin()?),
+        Request::GetMicrostepTime => Response::GetMicrostepTime(tmc.microstep_time()?),
+        Request::GetMotorLoad => Response::GetMotorLoad(tmc.motor_load()?),
+        Request::GetMicrostepPosition => Response::GetMicrostepPosition(tmc.microstep_position()?),
         Request::GetMicrostepCurrent => {
-            let (a, b) = tmc.lock(|x| x.borrow_mut().microstep_current())?;
+            let (a, b) = tmc.microstep_current()?;
             Response::GetMicrostepCurrent(a, b)
         }
-        Request::GetStopped => Response::GetStopped(tmc.lock(|x| x.borrow_mut().stopped())?),
-        Request::GetPwmMode => Response::GetPwmMode(tmc.lock(|x| x.borrow_mut().pwm_mode())?),
-        Request::GetCurrentScale => {
-            Response::GetCurrentScale(tmc.lock(|x| x.borrow_mut().current_scale())?)
-        }
-        Request::GetTemperature => {
-            Response::GetTemperature(tmc.lock(|x| x.borrow_mut().temperature())?)
-        }
-        Request::GetOpenLoad => Response::GetOpenLoad(tmc.lock(|x| x.borrow_mut().open_load())?),
-        Request::GetLowSideShort => {
-            Response::GetLowSideShort(tmc.lock(|x| x.borrow_mut().low_side_short())?)
-        }
-        Request::GetGroundShort => {
-            Response::GetGroundShort(tmc.lock(|x| x.borrow_mut().ground_short())?)
-        }
-        Request::GetOverTemperature => {
-            Response::GetOverTemperature(tmc.lock(|x| x.borrow_mut().over_temperature())?)
-        }
+        Request::GetStopped => Response::GetStopped(tmc.stopped()?),
+        Request::GetPwmMode => Response::GetPwmMode(tmc.pwm_mode()?),
+        Request::GetCurrentScale => Response::GetCurrentScale(tmc.current_scale()?),
+        Request::GetTemperature => Response::GetTemperature(tmc.temperature()?),
+        Request::GetOpenLoad => Response::GetOpenLoad(tmc.open_load()?),
+        Request::GetLowSideShort => Response::GetLowSideShort(tmc.low_side_short()?),
+        Request::GetGroundShort => Response::GetGroundShort(tmc.ground_short()?),
+        Request::GetOverTemperature => Response::GetOverTemperature(tmc.over_temperature()?),
     };
     Ok(response)
 }
@@ -922,13 +869,13 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
     }
 }
 
-fn run_tmc(tmc: TmcMutex<'static>) -> ! {
+fn run_tmc(tmc: TmcHandle<'static>) -> ! {
     let delay = Delay::new();
-    tmc.lock(|x| x.borrow_mut().enable());
+    tmc.enable();
     info!("TMC2209 initialized.");
     let mut v = 0.0;
     let a = 1.0;
-    let dx = 1.0 / (tmc.lock(|x| x.borrow_mut().pulses_per_rev().unwrap()) as f64);
+    let dx = 1.0 / (tmc.pulses_per_rev().unwrap() as f64);
     let dv2 = 2.0 * a * dx;
     let mut i = 0;
     loop {
@@ -956,7 +903,7 @@ fn run_tmc(tmc: TmcMutex<'static>) -> ! {
         }
 
         if dt < 1.0 {
-            tmc.lock(|x| x.borrow_mut().toggle_step());
+            tmc.toggle_step();
             delay.delay_micros((dt * 1e6) as u32);
         } else {
             delay.delay_millis(10);
