@@ -28,12 +28,14 @@ use embassy_time::{Duration, Timer};
 use esp_hal::{
     self,
     clock::CpuClock,
-    delay::Delay,
     interrupt::software::SoftwareInterruptControl,
     peripherals::{TIMG0, USB_DEVICE},
     system::Stack,
     time,
-    timer::timg::{MwdtStage, TimerGroup, Wdt},
+    timer::{
+        timg::{MwdtStage, TimerGroup, Wdt},
+        AnyTimer, PeriodicTimer,
+    },
 };
 use thiserror::Error;
 
@@ -645,7 +647,7 @@ async fn main(spawner: Spawner) -> ! {
         irc.software_interrupt0,
         irc.software_interrupt1,
         unsafe { &mut STACK },
-        || run_tmc(tmc_ref),
+        move || run_tmc(tmc_ref, timers.timer1),
     );
 
     // Initialize the sensor and coordinator.
@@ -729,7 +731,7 @@ async fn handle_request<'a>(
             tmc.set_powerdown_delay_s(delay)?;
             Response::SetPowerdownDelayS
         }
-        Request::GetMicrosteps => Response::GetMicrosteps(tmc.microsteps()?),
+        Request::GetMicrosteps => Response::GetMicrosteps(tmc.microsteps()),
         Request::SetMicrosteps(n) => {
             tmc.set_microsteps(n)?;
             Response::SetMicrosteps
@@ -739,7 +741,7 @@ async fn handle_request<'a>(
             tmc.set_filter_step_pulses(enable)?;
             Response::SetFilterStepPulses
         }
-        Request::GetDoubleEdgeStep => Response::GetDoubleEdgeStep(tmc.double_edge_step()?),
+        Request::GetDoubleEdgeStep => Response::GetDoubleEdgeStep(tmc.double_edge_step()),
         Request::SetDoubleEdgeStep(enable) => {
             tmc.set_double_edge_step(enable)?;
             Response::SetDoubleEdgeStep
@@ -869,44 +871,45 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
     }
 }
 
-fn run_tmc(tmc: TmcHandle<'static>) -> ! {
-    let delay = Delay::new();
+fn run_tmc(
+    tmc: TmcHandle<'static>,
+    timer: impl esp_hal::timer::Timer + Into<AnyTimer<'static>>,
+) -> ! {
+    let mut step_timer = PeriodicTimer::new(timer);
+    step_timer.start(time::Duration::from_micros(10)).unwrap();
     tmc.enable();
     info!("TMC2209 initialized.");
     let mut v = 0.0;
     let a = 1.0;
-    let dx = 1.0 / (tmc.pulses_per_rev().unwrap() as f64);
-    let dv2 = 2.0 * a * dx;
     let mut i = 0;
+    let mut elapsed_us = 0;
     loop {
-        let prev_v = v;
         let target_v = RPM.lock(|x| *x.borrow()) / 60.0;
-        let v2 = v * v;
-        let diff = target_v * target_v - v2;
-        if diff.abs() < dv2 {
-            v = target_v;
+        if v < target_v - 0.01 * a {
+            v += a * 0.01
+        } else if v > target_v + 0.01 * a {
+            v -= a * 0.01
         } else {
-            v = libm::sqrt(v2 + diff.signum() * dv2);
-        }
+            v = target_v
+        };
 
-        let dt = 2.0 * dx / (v + prev_v + 1e-10);
-        if i % 1000 == 0 {
+        let mut j = 0;
+        let dt = (1e6 / (v + 1e-10)) as u32 / tmc.pulses_per_rev();
+        for _ in 0..1000 {
+            step_timer.wait();
+            elapsed_us += 10;
+            if elapsed_us >= dt {
+                j += 1;
+                tmc.toggle_step();
+                elapsed_us = 0;
+            }
+        }
+        if i % 100 == 0 {
             info!("====Iteration: {}====", i);
             info!("dt: {}", dt);
-            info!("dx: {}", dx);
-            info!("v2: {}", v2);
-            info!("target_v2: {}", target_v * target_v);
-            info!("prev_v: {}", prev_v);
             info!("v: {}", v);
-            info!("diff: {}", diff);
             info!("target_v: {}", target_v);
-        }
-
-        if dt < 1.0 {
-            tmc.toggle_step();
-            delay.delay_micros((dt * 1e6) as u32);
-        } else {
-            delay.delay_millis(10);
+            info!("j: {}", j);
         }
         i += 1;
     }
