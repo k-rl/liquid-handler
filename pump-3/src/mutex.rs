@@ -1,4 +1,4 @@
-use core::{cell::RefCell, mem};
+use core::cell::RefCell;
 use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex as EmbassyMutex};
 
 pub struct Mutex<T> {
