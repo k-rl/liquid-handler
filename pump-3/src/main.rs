@@ -7,11 +7,13 @@
 )]
 
 mod flow_sensor;
+mod mutex;
 mod tmc2209;
 mod usb;
 
 use crate::{
     flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType},
+    mutex::Mutex,
     tmc2209::{
         BlankTime, OverTemperatureStatus, PhaseStatus, PwmFrequency, StopMode,
         TemperatureThreshold, Tmc2209,
@@ -19,11 +21,10 @@ use crate::{
     usb::PacketStream,
 };
 use alloc::sync::Arc;
-use core::{cell::RefCell, result};
+use core::result;
 use defmt::{info, Debug2Format, Format};
 use deku::prelude::*;
 use embassy_executor::Spawner;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, blocking_mutex::Mutex};
 use embassy_time::{Duration, Timer};
 use esp_hal::{
     self,
@@ -607,15 +608,14 @@ esp_bootloader_esp_idf::esp_app_desc!();
 
 type TmcHandle<'a> = Arc<Tmc2209<'a>>;
 
-static RPM: Mutex<CriticalSectionRawMutex, RefCell<f64>> = Mutex::new(RefCell::new(0.0));
-static FLOW_SENSOR: Mutex<CriticalSectionRawMutex, RefCell<FlowSensorInfo>> =
-    Mutex::new(RefCell::new(FlowSensorInfo {
-        air_in_line: false,
-        high_flow: false,
-        exponential_smoothing_active: false,
-        ul_per_min: 0.0,
-        degrees_c: 0.0,
-    }));
+static RPM: Mutex<f64> = Mutex::new(0.0);
+static FLOW_INFO: Mutex<FlowSensorInfo> = Mutex::new(FlowSensorInfo {
+    air_in_line: false,
+    high_flow: false,
+    exponential_smoothing_active: false,
+    ul_per_min: 0.0,
+    degrees_c: 0.0,
+});
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -695,12 +695,12 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>, tmc: TmcHandle<'a>) -> ! {
 async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Response> {
     let response = match packet {
         Request::Init => Response::Init,
-        Request::FlowSensorInfo => Response::FlowSensorInfo(FLOW_SENSOR.lock(|x| *x.borrow())),
+        Request::FlowSensorInfo => Response::FlowSensorInfo(FLOW_INFO.get_cloned()),
         Request::SetPumpRpm(rpm) => {
-            RPM.lock(|x| x.replace(rpm));
+            RPM.set(rpm);
             Response::SetPumpRpm
         }
-        Request::GetPumpRpm => Response::GetPumpRpm(RPM.lock(|x| *x.borrow())),
+        Request::GetPumpRpm => Response::GetPumpRpm(RPM.get_cloned()),
         Request::GetRmsAmps => Response::GetRmsAmps(tmc.rms_amps()?),
         Request::SetRmsAmps(amps) => {
             tmc.set_rms_amps(amps)?;
@@ -876,7 +876,7 @@ async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>) -> ! {
     loop {
         match sensor.read().await {
             Ok(info) => {
-                FLOW_SENSOR.lock(|x| x.replace(info));
+                FLOW_INFO.set(info);
             }
             Err(err) => {
                 info!("Flow sensor error: {:?}", Debug2Format(&err));
@@ -890,16 +890,18 @@ fn run_tmc(
     tmc: TmcHandle<'static>,
     timer: impl esp_hal::timer::Timer + Into<AnyTimer<'static>>,
 ) -> ! {
+    let step_us = 10;
     let mut step_timer = PeriodicTimer::new(timer);
-    step_timer.start(time::Duration::from_micros(10)).unwrap();
+    step_timer
+        .start(time::Duration::from_micros(step_us))
+        .unwrap();
     tmc.enable();
     info!("TMC2209 initialized.");
     let mut v = 0.0;
     let a = 1.0;
-    let mut i = 0;
     let mut elapsed_us = 0;
     loop {
-        let target_v = RPM.lock(|x| *x.borrow()) / 60.0;
+        let target_v = RPM.get_cloned() / 60.0;
         if v < target_v - 0.01 * a {
             v += a * 0.01
         } else if v > target_v + 0.01 * a {
@@ -908,24 +910,14 @@ fn run_tmc(
             v = target_v
         };
 
-        let mut j = 0;
-        let dt = (1e6 / (v + 1e-10)) as u32 / tmc.pulses_per_rev();
+        let dt = (1e6 / (v + 1e-10)) as u64 / tmc.pulses_per_rev() as u64;
         for _ in 0..1000 {
             step_timer.wait();
-            elapsed_us += 10;
+            elapsed_us += step_us;
             if elapsed_us >= dt {
-                j += 1;
                 tmc.toggle_step();
                 elapsed_us %= dt;
             }
         }
-        if i % 100 == 0 {
-            info!("====Iteration: {}====", i);
-            info!("dt: {}", dt);
-            info!("v: {}", v);
-            info!("target_v: {}", target_v);
-            info!("j: {}", j);
-        }
-        i += 1;
     }
 }

@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
-use core::{cell::RefCell, result};
+use crate::mutex::Mutex;
+use core::result;
 use defmt::{debug, info, Debug2Format, Format};
 use deku::ctx::BitSize;
 use deku::prelude::*;
-use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex};
 use embedded_io::{Read, ReadExactError, Write};
 use esp_hal::{
     gpio::{
@@ -650,11 +650,7 @@ impl Format for Tmc2209Error {
 
 pub type Result<T> = result::Result<T, Tmc2209Error>;
 
-type FieldMutex<T> = Mutex<CriticalSectionRawMutex, RefCell<T>>;
-
-fn mutate<T, R>(field: &FieldMutex<T>, f: impl FnOnce(&mut T) -> R) -> R {
-    field.lock(|cell| f(&mut *cell.borrow_mut()))
-}
+type FieldMutex<T> = Mutex<T>;
 
 pub struct Tmc2209<'a> {
     uart: FieldMutex<Uart<'a, Blocking>>,
@@ -689,29 +685,29 @@ impl<'a> Tmc2209<'a> {
         let disable_pin = Output::new(disable, Low, OutputConfig::default());
 
         let tmc = Self {
-            uart: Mutex::new(RefCell::new(uart)),
-            step_pin: Mutex::new(RefCell::new(step_pin)),
-            dir_pin: Mutex::new(RefCell::new(dir_pin)),
-            disable_pin: Mutex::new(RefCell::new(disable_pin)),
+            uart: Mutex::new(uart),
+            step_pin: Mutex::new(step_pin),
+            dir_pin: Mutex::new(dir_pin),
+            disable_pin: Mutex::new(disable_pin),
             address: 0,
-            steps_per_rev: Mutex::new(RefCell::new(200)),
-            clock_hz: Mutex::new(RefCell::new(12e6 as u64)),
-            sense_ohms: Mutex::new(RefCell::new(0.170)),
-            ref_volts: Mutex::new(RefCell::new(0.0)),
-            microsteps: Mutex::new(RefCell::new(8)),
-            double_edge_step: Mutex::new(RefCell::new(false)),
-            current_config: Mutex::new(RefCell::new(CurrentConfig {
+            steps_per_rev: Mutex::new(200),
+            clock_hz: Mutex::new(12e6 as u64),
+            sense_ohms: Mutex::new(0.170),
+            ref_volts: Mutex::new(0.0),
+            microsteps: Mutex::new(8),
+            double_edge_step: Mutex::new(false),
+            current_config: Mutex::new(CurrentConfig {
                 stopped_scale: 0,
                 running_scale: 0,
                 powerdown_duration: 1,
-            })),
-            coolstep_config: Mutex::new(RefCell::new(CoolstepConfig {
+            }),
+            coolstep_config: Mutex::new(CoolstepConfig {
                 lower_min_current: false,
                 current_downstep_rate: 0,
                 stallguard_hysteresis: 0,
                 current_upstep: 0,
                 stallguard_threshold: 0,
-            })),
+            }),
             /*
             response_delay: 3,
             powerdown_delay: 20,
@@ -765,7 +761,7 @@ impl<'a> Tmc2209<'a> {
             }),
         )?;
 
-        let current_config = mutate(&tmc.current_config, |config| *config);
+        let current_config = tmc.current_config.get_cloned();
         tmc.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))?;
 
         let mut driver_config = tmc.driver_config()?;
@@ -773,19 +769,18 @@ impl<'a> Tmc2209<'a> {
         driver_config.double_edge_step = false;
         tmc.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
 
-        mutate(&tmc.microsteps, |steps| {
-            *steps = driver_config.microstep_resolution.into()
-        });
+        tmc.microsteps
+            .set(driver_config.microstep_resolution.into());
 
         Ok(tmc)
     }
 
     pub fn enable(&self) {
-        mutate(&self.disable_pin, |pin| pin.set_low());
+        self.disable_pin.lock(|pin| pin.set_low());
     }
 
     pub fn disable(&self) {
-        mutate(&self.disable_pin, |pin| pin.set_high());
+        self.disable_pin.lock(|pin| pin.set_high());
     }
 
     // =============================
@@ -794,11 +789,11 @@ impl<'a> Tmc2209<'a> {
 
     // Global Configs
     pub fn clock_hz(&self) -> u64 {
-        mutate(&self.clock_hz, |hz| *hz)
+        self.clock_hz.get_cloned()
     }
 
     pub fn set_clock_hz(&self, hz: u64) {
-        mutate(&self.clock_hz, |value| *value = hz);
+        self.clock_hz.set(hz);
     }
 
     pub fn pin_uart_mode(&self) -> Result<bool> {
@@ -835,7 +830,7 @@ impl<'a> Tmc2209<'a> {
     // Current config.
     pub fn rms_amps(&self) -> Result<f64> {
         let low_sense_volts = self.driver_config()?.low_sense_resistor_voltage;
-        let running_scale = mutate(&self.current_config, |config| config.running_scale);
+        let running_scale = self.current_config.get_cloned().running_scale;
         Ok(self.scale_to_rms_amps(running_scale, low_sense_volts))
     }
 
@@ -843,7 +838,7 @@ impl<'a> Tmc2209<'a> {
         // Default to lower voltage unless it'll lead to a cuttoff current scale.
         let low_sense_volts = self.rms_amps_to_unclamped_scale(amps, true) <= 32;
         let mut driver_config = self.driver_config()?;
-        let mut current_config = mutate(&self.current_config, |config| *config);
+        let mut current_config = self.current_config.get_cloned();
         current_config.running_scale = self.rms_amps_to_scale(amps, low_sense_volts);
         // Make sure stopped current remains similar even if sense resistor voltage is changing,
         // unless it's 0 since we don't want to accidentally disable zero current mode.
@@ -859,22 +854,22 @@ impl<'a> Tmc2209<'a> {
         driver_config.low_sense_resistor_voltage = low_sense_volts;
         self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
         self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))?;
-        mutate(&self.current_config, |config| *config = current_config);
+        self.current_config.set(current_config);
         Ok(())
     }
 
     pub fn stopped_rms_amps(&self) -> Result<f64> {
         let low_sense_volts = self.driver_config()?.low_sense_resistor_voltage;
-        let stopped_scale = mutate(&self.current_config, |config| config.stopped_scale);
+        let stopped_scale = self.current_config.get_cloned().stopped_scale;
         Ok(self.scale_to_rms_amps(stopped_scale, low_sense_volts))
     }
 
     pub fn set_stopped_rms_amps(&self, amps: f64) -> Result<()> {
         let low_sense_volts = self.driver_config()?.low_sense_resistor_voltage;
-        let mut current_config = mutate(&self.current_config, |config| *config);
+        let mut current_config = self.current_config.get_cloned();
         current_config.stopped_scale = self.rms_amps_to_scale(amps, low_sense_volts);
         self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))?;
-        mutate(&self.current_config, |config| *config = current_config);
+        self.current_config.set(current_config);
         Ok(())
     }
 
@@ -882,7 +877,7 @@ impl<'a> Tmc2209<'a> {
         let mut config = self.global_config()?;
         config.external_current_scaling = volts > 0.0;
         self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
-        mutate(&self.ref_volts, |value| *value = volts);
+        self.ref_volts.set(volts);
         Ok(())
     }
 
@@ -896,7 +891,7 @@ impl<'a> Tmc2209<'a> {
             ohms
         };
         self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(config))?;
-        mutate(&self.sense_ohms, |value| *value = ohms);
+        self.sense_ohms.set(ohms);
         Ok(())
     }
 
@@ -912,25 +907,25 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn powerdown_duration_s(&self) -> Result<f64> {
-        let duration = mutate(&self.current_config, |config| config.powerdown_duration);
-        let clock_hz = mutate(&self.clock_hz, |hz| *hz);
+        let duration = self.current_config.get_cloned().powerdown_duration;
+        let clock_hz = self.clock_hz.get_cloned();
         Ok(duration as f64 * (1 << 18) as f64 / clock_hz as f64)
     }
 
     pub fn set_powerdown_duration_s(&self, duration: f64) -> Result<()> {
-        let clock_hz = mutate(&self.clock_hz, |hz| *hz);
+        let clock_hz = self.clock_hz.get_cloned();
         let scale = clock_hz as f64 / (1 << 18) as f64;
-        let mut current_config = mutate(&self.current_config, |config| *config);
+        let mut current_config = self.current_config.get_cloned();
         current_config.powerdown_duration = libm::round(scale * duration) as u8;
         self.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))?;
-        mutate(&self.current_config, |config| *config = current_config);
+        self.current_config.set(current_config);
         Ok(())
     }
 
     pub fn powerdown_delay_s(&self) -> Result<f64> {
         if let FrameData::PowerDownDelay(delay) = self.read_register(POWERDOWN_DELAY_REG)? {
             info!("Powerdown delay: {}", delay);
-            let clock_hz = mutate(&self.clock_hz, |hz| *hz);
+            let clock_hz = self.clock_hz.get_cloned();
             Ok(delay as f64 * (1 << 18) as f64 / clock_hz as f64)
         } else {
             Err(Tmc2209Error::InvalidResponse)
@@ -938,7 +933,7 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn set_powerdown_delay_s(&self, delay: f64) -> Result<()> {
-        let clock_hz = mutate(&self.clock_hz, |hz| *hz);
+        let clock_hz = self.clock_hz.get_cloned();
         let scale = clock_hz as f64 / (1 << 18) as f64;
         let delay = libm::round(scale * delay).clamp(0.0, 15.0) as u8;
         self.write_register(POWERDOWN_DELAY_REG, FrameData::PowerDownDelay(delay))
@@ -946,7 +941,7 @@ impl<'a> Tmc2209<'a> {
 
     // Step config
     pub fn microsteps(&self) -> u16 {
-        mutate(&self.microsteps, |steps| *steps)
+        self.microsteps.get_cloned()
     }
 
     pub fn set_microsteps(&self, mut num_microsteps: u16) -> Result<()> {
@@ -964,16 +959,16 @@ impl<'a> Tmc2209<'a> {
             self.write_register(GLOBAL_CONFIG_REG, FrameData::GlobalConfig(global_config))?;
             self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
         }
-        mutate(&self.microsteps, |steps| *steps = num_microsteps);
+        self.microsteps.set(num_microsteps);
         Ok(())
     }
 
     pub fn steps_per_rev(&self) -> u32 {
-        mutate(&self.steps_per_rev, |steps| *steps)
+        self.steps_per_rev.get_cloned()
     }
 
     pub fn set_steps_per_rev(&self, steps: u32) {
-        mutate(&self.steps_per_rev, |value| *value = steps);
+        self.steps_per_rev.set(steps);
     }
 
     pub fn filter_step_pulses(&self) -> Result<bool> {
@@ -988,14 +983,14 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn double_edge_step(&self) -> bool {
-        mutate(&self.double_edge_step, |steps| *steps)
+        self.double_edge_step.get_cloned()
     }
 
     pub fn set_double_edge_step(&self, enable: bool) -> Result<()> {
         let mut config = self.driver_config()?;
         config.double_edge_step = enable;
         self.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(config))?;
-        mutate(&self.double_edge_step, |steps| *steps = enable);
+        self.double_edge_step.set(enable);
         Ok(())
     }
 
@@ -1048,72 +1043,62 @@ impl<'a> Tmc2209<'a> {
     }
 
     pub fn coolstep_lower_min_current(&self) -> Result<bool> {
-        Ok(mutate(&self.coolstep_config, |config| {
-            config.lower_min_current
-        }))
+        Ok(self.coolstep_config.get_cloned().lower_min_current)
     }
 
     pub fn set_coolstep_lower_min_current(&self, enable: bool) -> Result<()> {
-        let mut config = mutate(&self.coolstep_config, |config| *config);
+        let mut config = self.coolstep_config.get_cloned();
         config.lower_min_current = enable;
         self.write_register(COOLSTEP_CONFIG_REG, FrameData::CoolstepConfig(config))?;
-        mutate(&self.coolstep_config, |current| *current = config);
+        self.coolstep_config.set(config);
         Ok(())
     }
 
     pub fn coolstep_current_downstep_rate(&self) -> Result<u8> {
-        Ok(mutate(&self.coolstep_config, |config| {
-            config.current_downstep_rate
-        }))
+        Ok(self.coolstep_config.get_cloned().current_downstep_rate)
     }
 
     pub fn set_coolstep_current_downstep_rate(&self, rate: u8) -> Result<()> {
-        let mut config = mutate(&self.coolstep_config, |config| *config);
+        let mut config = self.coolstep_config.get_cloned();
         config.current_downstep_rate = rate;
         self.write_register(COOLSTEP_CONFIG_REG, FrameData::CoolstepConfig(config))?;
-        mutate(&self.coolstep_config, |current| *current = config);
+        self.coolstep_config.set(config);
         Ok(())
     }
 
     pub fn stallguard_hysteresis(&self) -> Result<u8> {
-        Ok(mutate(&self.coolstep_config, |config| {
-            config.stallguard_hysteresis
-        }))
+        Ok(self.coolstep_config.get_cloned().stallguard_hysteresis)
     }
 
     pub fn set_stallguard_hysteresis(&self, hysteresis: u8) -> Result<()> {
-        let mut config = mutate(&self.coolstep_config, |config| *config);
+        let mut config = self.coolstep_config.get_cloned();
         config.stallguard_hysteresis = hysteresis;
         self.write_register(COOLSTEP_CONFIG_REG, FrameData::CoolstepConfig(config))?;
-        mutate(&self.coolstep_config, |current| *current = config);
+        self.coolstep_config.set(config);
         Ok(())
     }
 
     pub fn current_upstep(&self) -> Result<u8> {
-        Ok(mutate(&self.coolstep_config, |config| {
-            config.current_upstep
-        }))
+        Ok(self.coolstep_config.get_cloned().current_upstep)
     }
 
     pub fn set_current_upstep(&self, upstep: u8) -> Result<()> {
-        let mut config = mutate(&self.coolstep_config, |config| *config);
+        let mut config = self.coolstep_config.get_cloned();
         config.current_upstep = upstep;
         self.write_register(COOLSTEP_CONFIG_REG, FrameData::CoolstepConfig(config))?;
-        mutate(&self.coolstep_config, |current| *current = config);
+        self.coolstep_config.set(config);
         Ok(())
     }
 
     pub fn coolstep_stallguard_threshold(&self) -> Result<u8> {
-        Ok(mutate(&self.coolstep_config, |config| {
-            config.stallguard_threshold
-        }))
+        Ok(self.coolstep_config.get_cloned().stallguard_threshold)
     }
 
     pub fn set_coolstep_stallguard_threshold(&self, threshold: u8) -> Result<()> {
-        let mut config = mutate(&self.coolstep_config, |config| *config);
+        let mut config = self.coolstep_config.get_cloned();
         config.stallguard_threshold = threshold;
         self.write_register(COOLSTEP_CONFIG_REG, FrameData::CoolstepConfig(config))?;
-        mutate(&self.coolstep_config, |current| *current = config);
+        self.coolstep_config.set(config);
         Ok(())
     }
 
@@ -1203,8 +1188,8 @@ impl<'a> Tmc2209<'a> {
         }
 
         if let FrameData::PwmThreshold(threshold) = self.read_register(PWM_THRESHOLD_REG)? {
-            let clock_hz = mutate(&self.clock_hz, |hz| *hz);
-            let steps_per_rev = mutate(&self.steps_per_rev, |steps| *steps);
+            let clock_hz = self.clock_hz.get_cloned();
+            let steps_per_rev = self.steps_per_rev.get_cloned();
             Ok(60.0 * clock_hz as f64 / (255.0 * (threshold * steps_per_rev) as f64))
         } else {
             Err(Tmc2209Error::InvalidResponse)
@@ -1217,8 +1202,8 @@ impl<'a> Tmc2209<'a> {
             config.disable_pwm = true;
         } else {
             config.disable_pwm = false;
-            let clock_hz = mutate(&self.clock_hz, |hz| *hz);
-            let steps_per_rev = mutate(&self.steps_per_rev, |steps| *steps);
+            let clock_hz = self.clock_hz.get_cloned();
+            let steps_per_rev = self.steps_per_rev.get_cloned();
             let threshold =
                 libm::round(60.0 * clock_hz as f64 / (256.0 * rpm * steps_per_rev as f64)) as u32;
             info!("{}", threshold);
@@ -1319,7 +1304,7 @@ impl<'a> Tmc2209<'a> {
     // ====Motion Control======
     // ========================
     pub fn toggle_step(&self) {
-        mutate(&self.step_pin, |pin| pin.toggle());
+        self.step_pin.lock(|pin| pin.toggle());
     }
 
     pub fn invert_direction(&self) -> Result<bool> {
@@ -1635,8 +1620,8 @@ impl<'a> Tmc2209<'a> {
     }
 
     fn current_multiplier(&self, low_sense_volts: bool) -> f64 {
-        let sense_ohms = mutate(&self.sense_ohms, |value| *value);
-        let ref_volts = mutate(&self.ref_volts, |value| *value);
+        let sense_ohms = self.sense_ohms.get_cloned();
+        let ref_volts = self.ref_volts.get_cloned();
         let mut multiplier = 1.0 / (32.0 * 1.4142 * (sense_ohms + 0.02));
         if ref_volts > 0.0 {
             multiplier *= ref_volts / 2.5;
@@ -1645,7 +1630,7 @@ impl<'a> Tmc2209<'a> {
     }
 
     fn write_register(&self, register: u8, data: FrameData) -> Result<()> {
-        mutate(&self.uart, |uart| {
+        self.uart.lock(|uart| {
             let frame = WriteFrame {
                 address: self.address,
                 register,
@@ -1679,7 +1664,7 @@ impl<'a> Tmc2209<'a> {
     }
 
     fn read_register(&self, register: u8) -> Result<FrameData> {
-        mutate(&self.uart, |uart| {
+        self.uart.lock(|uart| {
             let request = ReadRequestFrame {
                 address: self.address,
                 register,
