@@ -119,7 +119,9 @@ const GET_OPEN_LOAD: u8 = 0x46;
 const GET_LOW_SIDE_SHORT: u8 = 0x47;
 const GET_GROUND_SHORT: u8 = 0x48;
 const GET_OVERTEMPERATURE: u8 = 0x49;
+const GET_FLOW_HISTORY: u8 = 0x4A;
 const FAIL: u8 = 0xFF;
+const FLOW_HISTORY_LEN: usize = 1000;
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
 #[deku(id_type = "u8", endian = "big")]
@@ -345,6 +347,9 @@ enum Request {
 
     #[deku(id = "GET_OVERTEMPERATURE")]
     GetOverTemperature,
+
+    #[deku(id = "GET_FLOW_HISTORY")]
+    GetFlowHistory,
 }
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
@@ -572,6 +577,9 @@ enum Response {
     #[deku(id = "GET_OVERTEMPERATURE")]
     GetOverTemperature(#[deku(bits = 8)] OverTemperatureStatus),
 
+    #[deku(id = "GET_FLOW_HISTORY")]
+    GetFlowHistory([f64; FLOW_HISTORY_LEN]),
+
     #[deku(id = "FAIL")]
     Fail,
 }
@@ -617,6 +625,8 @@ type TmcHandle<'a> = Arc<Tmc2209<'a>>;
 
 static RPM: Mutex<f64> = Mutex::new(0.0);
 static UL_PER_MIN: Mutex<f64> = Mutex::new(f64::NAN);
+static FLOW_HISTORY: Mutex<[f64; FLOW_HISTORY_LEN]> = Mutex::new([f64::NAN; FLOW_HISTORY_LEN]);
+static FLOW_HISTORY_INDEX: Mutex<usize> = Mutex::new(0);
 static FLOW_INFO: Mutex<FlowSensorInfo> = Mutex::new(FlowSensorInfo {
     air_in_line: false,
     high_flow: false,
@@ -869,6 +879,15 @@ async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Resp
         Request::GetLowSideShort => Response::GetLowSideShort(tmc.low_side_short()?),
         Request::GetGroundShort => Response::GetGroundShort(tmc.ground_short()?),
         Request::GetOverTemperature => Response::GetOverTemperature(tmc.over_temperature()?),
+        Request::GetFlowHistory => {
+            let index = FLOW_HISTORY_INDEX.get_cloned();
+            let samples = FLOW_HISTORY.get_cloned();
+            let mut ordered = [f64::NAN; FLOW_HISTORY_LEN];
+            let tail_len = FLOW_HISTORY_LEN - index;
+            ordered[..tail_len].copy_from_slice(&samples[index..]);
+            ordered[tail_len..].copy_from_slice(&samples[..index]);
+            Response::GetFlowHistory(ordered)
+        }
     };
     Ok(response)
 }
@@ -889,6 +908,9 @@ async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>) -> ! {
         match sensor.read().await {
             Ok(info) => {
                 FLOW_INFO.set(info);
+                let index = FLOW_HISTORY_INDEX.get_cloned();
+                FLOW_HISTORY.lock(|history| history[index] = info.ul_per_min);
+                FLOW_HISTORY_INDEX.set((index + 1) % FLOW_HISTORY_LEN);
             }
             Err(err) => {
                 info!("Flow sensor error: {:?}", Debug2Format(&err));
