@@ -954,7 +954,8 @@ fn run_tmc(
             v = target_v
         };
 
-        let dt = (1e6 / (v + 1e-10)) as u64 / tmc.pulses_per_rev() as u64;
+        tmc.set_direction(v >= 0.0);
+        let dt = (1e6 / (v.abs() + 1e-10)) as u64 / tmc.pulses_per_rev() as u64;
         for _ in 0..1000 {
             step_timer.wait();
             elapsed_us += step_us;

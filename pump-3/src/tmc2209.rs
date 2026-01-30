@@ -783,6 +783,16 @@ impl<'a> Tmc2209<'a> {
         self.disable_pin.lock(|pin| pin.set_high());
     }
 
+    pub fn set_direction(&self, forward: bool) {
+        self.dir_pin.lock(|pin| {
+            if forward {
+                pin.set_low();
+            } else {
+                pin.set_high();
+            }
+        });
+    }
+
     // =============================
     // ====Configuration options====
     // =============================
