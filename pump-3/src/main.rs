@@ -20,9 +20,9 @@ use crate::{
     },
     usb::PacketStream,
 };
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use core::result;
-use defmt::{info, Debug2Format, Format};
+use defmt::{debug, info, Debug2Format, Format};
 use deku::prelude::*;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -38,6 +38,7 @@ use esp_hal::{
         AnyTimer, PeriodicTimer,
     },
 };
+use heapless::Deque;
 use thiserror::Error;
 
 use panic_rtt_target as _;
@@ -352,7 +353,7 @@ enum Request {
     GetFlowHistory,
 }
 
-#[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
+#[derive(Debug, Clone, DekuRead, DekuWrite, Format)]
 #[deku(id_type = "u8", endian = "big")]
 enum Response {
     #[deku(id = "INIT")]
@@ -578,7 +579,11 @@ enum Response {
     GetOverTemperature(#[deku(bits = 8)] OverTemperatureStatus),
 
     #[deku(id = "GET_FLOW_HISTORY")]
-    GetFlowHistory([f64; FLOW_HISTORY_LEN]),
+    GetFlowHistory {
+        len: u16,
+        #[deku(count = "len")]
+        samples: Vec<f64>,
+    },
 
     #[deku(id = "FAIL")]
     Fail,
@@ -625,8 +630,7 @@ type TmcHandle<'a> = Arc<Tmc2209<'a>>;
 
 static RPM: Mutex<f64> = Mutex::new(0.0);
 static UL_PER_MIN: Mutex<f64> = Mutex::new(f64::NAN);
-static FLOW_HISTORY: Mutex<[f64; FLOW_HISTORY_LEN]> = Mutex::new([f64::NAN; FLOW_HISTORY_LEN]);
-static FLOW_HISTORY_INDEX: Mutex<usize> = Mutex::new(0);
+static FLOW_HISTORY: Mutex<Deque<f64, FLOW_HISTORY_LEN>> = Mutex::new(Deque::new());
 static FLOW_INFO: Mutex<FlowSensorInfo> = Mutex::new(FlowSensorInfo {
     air_in_line: false,
     high_flow: false,
@@ -689,7 +693,7 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>, tmc: TmcHandle<'a>) -> ! {
             continue;
         };
 
-        info!("Received packet: {=[?]}", &packet[..]);
+        debug!("Received packet: {=[?]}", &packet[..]);
         let response = match Request::from_bytes((&packet, 0)) {
             Ok((_, packet)) => match handle_request(packet, &tmc).await {
                 Ok(response) => response,
@@ -705,7 +709,7 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>, tmc: TmcHandle<'a>) -> ! {
         };
 
         let response_bytes = response.to_bytes().unwrap();
-        info!("Sending response: {=[?]}", &response_bytes[..]);
+        debug!("Sending response: {=[?]}", &response_bytes[..]);
         stream.write(&response.to_bytes().unwrap()).await;
     }
 }
@@ -735,7 +739,6 @@ async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Resp
         }
         Request::GetStopMode => Response::GetStopMode(tmc.stop_mode()?),
         Request::SetStopMode(mode) => {
-            info!("{}", mode);
             tmc.set_stop_mode(mode)?;
             Response::SetStopMode
         }
@@ -880,13 +883,17 @@ async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Resp
         Request::GetGroundShort => Response::GetGroundShort(tmc.ground_short()?),
         Request::GetOverTemperature => Response::GetOverTemperature(tmc.over_temperature()?),
         Request::GetFlowHistory => {
-            let index = FLOW_HISTORY_INDEX.get_cloned();
-            let samples = FLOW_HISTORY.get_cloned();
-            let mut ordered = [f64::NAN; FLOW_HISTORY_LEN];
-            let tail_len = FLOW_HISTORY_LEN - index;
-            ordered[..tail_len].copy_from_slice(&samples[index..]);
-            ordered[tail_len..].copy_from_slice(&samples[..index]);
-            Response::GetFlowHistory(ordered)
+            let samples: Vec<f64> = FLOW_HISTORY.lock(|history| {
+                let mut samples = Vec::with_capacity(history.len());
+                while let Some(sample) = history.pop_front() {
+                    samples.push(sample);
+                }
+                samples
+            });
+            Response::GetFlowHistory {
+                len: samples.len() as u16,
+                samples,
+            }
         }
     };
     Ok(response)
@@ -908,9 +915,12 @@ async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>) -> ! {
         match sensor.read().await {
             Ok(info) => {
                 FLOW_INFO.set(info);
-                let index = FLOW_HISTORY_INDEX.get_cloned();
-                FLOW_HISTORY.lock(|history| history[index] = info.ul_per_min);
-                FLOW_HISTORY_INDEX.set((index + 1) % FLOW_HISTORY_LEN);
+                FLOW_HISTORY.lock(|history| {
+                    if history.is_full() {
+                        history.pop_front();
+                    }
+                    history.push_back(info.ul_per_min).unwrap();
+                });
             }
             Err(err) => {
                 info!("Flow sensor error: {:?}", Debug2Format(&err));
