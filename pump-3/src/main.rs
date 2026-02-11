@@ -15,8 +15,7 @@ use crate::{
     flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType},
     mutex::Mutex,
     tmc2209::{
-        BlankTime, OverTemperatureStatus, PhaseStatus, PwmFrequency, StopMode,
-        TemperatureThreshold, Tmc2209,
+        BlankTime, OverTemperatureStatus, PwmFrequency, StopMode, TemperatureThreshold, Tmc2209,
     },
     usb::PacketStream,
 };
@@ -29,6 +28,7 @@ use embassy_time::{Duration, Timer};
 use esp_hal::{
     self,
     clock::CpuClock,
+    gpio::{Level::Low, Output, OutputConfig},
     interrupt::software::SoftwareInterruptControl,
     peripherals::{TIMG0, USB_DEVICE},
     system::Stack,
@@ -57,22 +57,8 @@ const GET_STOP_RMS_AMPS: u8 = 0x07;
 const SET_STOP_RMS_AMPS: u8 = 0x08;
 const GET_STOP_MODE: u8 = 0x09;
 const SET_STOP_MODE: u8 = 0x0A;
-const GET_POWERDOWN_DURATION_S: u8 = 0x0B;
-const SET_POWERDOWN_DURATION_S: u8 = 0x0C;
-const GET_POWERDOWN_DELAY_S: u8 = 0x0D;
-const SET_POWERDOWN_DELAY_S: u8 = 0x0E;
 const GET_MICROSTEPS: u8 = 0x0F;
 const SET_MICROSTEPS: u8 = 0x10;
-const GET_FILTER_STEP_PULSES: u8 = 0x11;
-const SET_FILTER_STEP_PULSES: u8 = 0x12;
-const GET_DOUBLE_EDGE_STEP: u8 = 0x13;
-const SET_DOUBLE_EDGE_STEP: u8 = 0x14;
-const GET_INTERPOLATE_MICROSTEPS: u8 = 0x15;
-const SET_INTERPOLATE_MICROSTEPS: u8 = 0x16;
-const GET_SHORT_SUPPLY_PROTECT: u8 = 0x17;
-const SET_SHORT_SUPPLY_PROTECT: u8 = 0x18;
-const GET_SHORT_GROUND_PROTECT: u8 = 0x19;
-const SET_SHORT_GROUND_PROTECT: u8 = 0x1A;
 const GET_BLANK_TIME: u8 = 0x1B;
 const SET_BLANK_TIME: u8 = 0x1C;
 const GET_HYSTERESIS_END: u8 = 0x1D;
@@ -87,41 +73,24 @@ const GET_DRIVER_SWITCH_AUTOSCALE_LIMIT: u8 = 0x25;
 const SET_DRIVER_SWITCH_AUTOSCALE_LIMIT: u8 = 0x26;
 const GET_MAX_AMPLITUDE_CHANGE: u8 = 0x27;
 const SET_MAX_AMPLITUDE_CHANGE: u8 = 0x28;
-const GET_PWM_AUTOGRADIENT: u8 = 0x29;
-const SET_PWM_AUTOGRADIENT: u8 = 0x2A;
-const GET_PWN_AUTOSCALE: u8 = 0x2B;
-const SET_PWN_AUTOSCALE: u8 = 0x2C;
 const GET_PWM_FREQUENCY: u8 = 0x2D;
 const SET_PWM_FREQUENCY: u8 = 0x2E;
 const GET_PWM_GRADIENT: u8 = 0x2F;
 const SET_PWM_GRADIENT: u8 = 0x30;
 const GET_PWM_OFFSET: u8 = 0x31;
 const SET_PWM_OFFSET: u8 = 0x32;
-const GET_CHARGE_PUMP_UNDERVOLTAGE: u8 = 0x33;
-const GET_DRIVER_ERROR: u8 = 0x34;
-const GET_IS_RESET: u8 = 0x35;
-const GET_DIRECTION_PIN: u8 = 0x36;
-const GET_DISABLE_PWM_PIN: u8 = 0x37;
-const GET_STEP_PIN: u8 = 0x38;
-const GET_POWERDOWN_UART_PIN: u8 = 0x39;
-const GET_DIAGNOSTIC_PIN: u8 = 0x3A;
-const GET_MICROSTEP2_PIN: u8 = 0x3B;
-const GET_MICROSTEP1_PIN: u8 = 0x3C;
-const GET_DISABLE_PIN: u8 = 0x3D;
 const GET_MICROSTEP_TIME: u8 = 0x3E;
 const GET_MOTOR_LOAD: u8 = 0x3F;
 const GET_MICROSTEP_POSITION: u8 = 0x40;
 const GET_MICROSTEP_CURRENT: u8 = 0x41;
-const GET_STOPPED: u8 = 0x42;
-const GET_PWM_MODE: u8 = 0x43;
 const GET_CURRENT_SCALE: u8 = 0x44;
 const GET_TEMPERATURE: u8 = 0x45;
-const GET_OPEN_LOAD: u8 = 0x46;
-const GET_LOW_SIDE_SHORT: u8 = 0x47;
-const GET_GROUND_SHORT: u8 = 0x48;
 const GET_OVERTEMPERATURE: u8 = 0x49;
 const GET_FLOW_HISTORY: u8 = 0x4A;
+const GET_VALVE: u8 = 0x4B;
+const SET_VALVE: u8 = 0x4C;
 const FAIL: u8 = 0xFF;
+
 const FLOW_HISTORY_LEN: usize = 1000;
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
@@ -160,53 +129,11 @@ enum Request {
     #[deku(id = "SET_STOP_MODE")]
     SetStopMode(#[deku(bits = 8)] StopMode),
 
-    #[deku(id = "GET_POWERDOWN_DURATION_S")]
-    GetPowerdownDurationS,
-
-    #[deku(id = "SET_POWERDOWN_DURATION_S")]
-    SetPowerdownDurationS(f64),
-
-    #[deku(id = "GET_POWERDOWN_DELAY_S")]
-    GetPowerdownDelayS,
-
-    #[deku(id = "SET_POWERDOWN_DELAY_S")]
-    SetPowerdownDelayS(f64),
-
     #[deku(id = "GET_MICROSTEPS")]
     GetMicrosteps,
 
     #[deku(id = "SET_MICROSTEPS")]
     SetMicrosteps(u16),
-
-    #[deku(id = "GET_FILTER_STEP_PULSES")]
-    GetFilterStepPulses,
-
-    #[deku(id = "SET_FILTER_STEP_PULSES")]
-    SetFilterStepPulses(bool),
-
-    #[deku(id = "GET_DOUBLE_EDGE_STEP")]
-    GetDoubleEdgeStep,
-
-    #[deku(id = "SET_DOUBLE_EDGE_STEP")]
-    SetDoubleEdgeStep(bool),
-
-    #[deku(id = "GET_INTERPOLATE_MICROSTEPS")]
-    GetInterpolateMicrosteps,
-
-    #[deku(id = "SET_INTERPOLATE_MICROSTEPS")]
-    SetInterpolateMicrosteps(bool),
-
-    #[deku(id = "GET_SHORT_SUPPLY_PROTECT")]
-    GetShortSupplyProtect,
-
-    #[deku(id = "SET_SHORT_SUPPLY_PROTECT")]
-    SetShortSupplyProtect(bool),
-
-    #[deku(id = "GET_SHORT_GROUND_PROTECT")]
-    GetShortGroundProtect,
-
-    #[deku(id = "SET_SHORT_GROUND_PROTECT")]
-    SetShortGroundProtect(bool),
 
     #[deku(id = "GET_BLANK_TIME")]
     GetBlankTime,
@@ -250,18 +177,6 @@ enum Request {
     #[deku(id = "SET_MAX_AMPLITUDE_CHANGE")]
     SetMaxAmplitudeChange(u8),
 
-    #[deku(id = "GET_PWM_AUTOGRADIENT")]
-    GetPwmAutogradient,
-
-    #[deku(id = "SET_PWM_AUTOGRADIENT")]
-    SetPwmAutogradient(bool),
-
-    #[deku(id = "GET_PWN_AUTOSCALE")]
-    GetPwnAutoscale,
-
-    #[deku(id = "SET_PWN_AUTOSCALE")]
-    SetPwnAutoscale(bool),
-
     #[deku(id = "GET_PWM_FREQUENCY")]
     GetPwmFrequency,
 
@@ -280,39 +195,6 @@ enum Request {
     #[deku(id = "SET_PWM_OFFSET")]
     SetPwmOffset(u8),
 
-    #[deku(id = "GET_CHARGE_PUMP_UNDERVOLTAGE")]
-    GetChargePumpUndervoltage,
-
-    #[deku(id = "GET_DRIVER_ERROR")]
-    GetDriverError,
-
-    #[deku(id = "GET_IS_RESET")]
-    GetIsReset,
-
-    #[deku(id = "GET_DIRECTION_PIN")]
-    GetDirectionPin,
-
-    #[deku(id = "GET_DISABLE_PWM_PIN")]
-    GetDisablePwmPin,
-
-    #[deku(id = "GET_STEP_PIN")]
-    GetStepPin,
-
-    #[deku(id = "GET_POWERDOWN_UART_PIN")]
-    GetPowerdownUartPin,
-
-    #[deku(id = "GET_DIAGNOSTIC_PIN")]
-    GetDiagnosticPin,
-
-    #[deku(id = "GET_MICROSTEP2_PIN")]
-    GetMicrostep2Pin,
-
-    #[deku(id = "GET_MICROSTEP1_PIN")]
-    GetMicrostep1Pin,
-
-    #[deku(id = "GET_DISABLE_PIN")]
-    GetDisablePin,
-
     #[deku(id = "GET_MICROSTEP_TIME")]
     GetMicrostepTime,
 
@@ -325,32 +207,23 @@ enum Request {
     #[deku(id = "GET_MICROSTEP_CURRENT")]
     GetMicrostepCurrent,
 
-    #[deku(id = "GET_STOPPED")]
-    GetStopped,
-
-    #[deku(id = "GET_PWM_MODE")]
-    GetPwmMode,
-
     #[deku(id = "GET_CURRENT_SCALE")]
     GetCurrentScale,
 
     #[deku(id = "GET_TEMPERATURE")]
     GetTemperature,
 
-    #[deku(id = "GET_OPEN_LOAD")]
-    GetOpenLoad,
-
-    #[deku(id = "GET_LOW_SIDE_SHORT")]
-    GetLowSideShort,
-
-    #[deku(id = "GET_GROUND_SHORT")]
-    GetGroundShort,
-
     #[deku(id = "GET_OVERTEMPERATURE")]
     GetOverTemperature,
 
     #[deku(id = "GET_FLOW_HISTORY")]
     GetFlowHistory,
+
+    #[deku(id = "GET_VALVE")]
+    GetValve,
+
+    #[deku(id = "SET_VALVE")]
+    SetValve(bool),
 }
 
 #[derive(Debug, Clone, DekuRead, DekuWrite, Format)]
@@ -389,53 +262,11 @@ enum Response {
     #[deku(id = "SET_STOP_MODE")]
     SetStopMode,
 
-    #[deku(id = "GET_POWERDOWN_DURATION_S")]
-    GetPowerdownDurationS(f64),
-
-    #[deku(id = "SET_POWERDOWN_DURATION_S")]
-    SetPowerdownDurationS,
-
-    #[deku(id = "GET_POWERDOWN_DELAY_S")]
-    GetPowerdownDelayS(f64),
-
-    #[deku(id = "SET_POWERDOWN_DELAY_S")]
-    SetPowerdownDelayS,
-
     #[deku(id = "GET_MICROSTEPS")]
     GetMicrosteps(u16),
 
     #[deku(id = "SET_MICROSTEPS")]
     SetMicrosteps,
-
-    #[deku(id = "GET_FILTER_STEP_PULSES")]
-    GetFilterStepPulses(bool),
-
-    #[deku(id = "SET_FILTER_STEP_PULSES")]
-    SetFilterStepPulses,
-
-    #[deku(id = "GET_DOUBLE_EDGE_STEP")]
-    GetDoubleEdgeStep(bool),
-
-    #[deku(id = "SET_DOUBLE_EDGE_STEP")]
-    SetDoubleEdgeStep,
-
-    #[deku(id = "GET_INTERPOLATE_MICROSTEPS")]
-    GetInterpolateMicrosteps(bool),
-
-    #[deku(id = "SET_INTERPOLATE_MICROSTEPS")]
-    SetInterpolateMicrosteps,
-
-    #[deku(id = "GET_SHORT_SUPPLY_PROTECT")]
-    GetShortSupplyProtect(bool),
-
-    #[deku(id = "SET_SHORT_SUPPLY_PROTECT")]
-    SetShortSupplyProtect,
-
-    #[deku(id = "GET_SHORT_GROUND_PROTECT")]
-    GetShortGroundProtect(bool),
-
-    #[deku(id = "SET_SHORT_GROUND_PROTECT")]
-    SetShortGroundProtect,
 
     #[deku(id = "GET_BLANK_TIME")]
     GetBlankTime(#[deku(bits = 8)] BlankTime),
@@ -479,18 +310,6 @@ enum Response {
     #[deku(id = "SET_MAX_AMPLITUDE_CHANGE")]
     SetMaxAmplitudeChange,
 
-    #[deku(id = "GET_PWM_AUTOGRADIENT")]
-    GetPwmAutogradient(bool),
-
-    #[deku(id = "SET_PWM_AUTOGRADIENT")]
-    SetPwmAutogradient,
-
-    #[deku(id = "GET_PWN_AUTOSCALE")]
-    GetPwnAutoscale(bool),
-
-    #[deku(id = "SET_PWN_AUTOSCALE")]
-    SetPwnAutoscale,
-
     #[deku(id = "GET_PWM_FREQUENCY")]
     GetPwmFrequency(#[deku(bits = 8)] PwmFrequency),
 
@@ -509,39 +328,6 @@ enum Response {
     #[deku(id = "SET_PWM_OFFSET")]
     SetPwmOffset,
 
-    #[deku(id = "GET_CHARGE_PUMP_UNDERVOLTAGE")]
-    GetChargePumpUndervoltage(bool),
-
-    #[deku(id = "GET_DRIVER_ERROR")]
-    GetDriverError(bool),
-
-    #[deku(id = "GET_IS_RESET")]
-    GetIsReset(bool),
-
-    #[deku(id = "GET_DIRECTION_PIN")]
-    GetDirectionPin(bool),
-
-    #[deku(id = "GET_DISABLE_PWM_PIN")]
-    GetDisablePwmPin(bool),
-
-    #[deku(id = "GET_STEP_PIN")]
-    GetStepPin(bool),
-
-    #[deku(id = "GET_POWERDOWN_UART_PIN")]
-    GetPowerdownUartPin(bool),
-
-    #[deku(id = "GET_DIAGNOSTIC_PIN")]
-    GetDiagnosticPin(bool),
-
-    #[deku(id = "GET_MICROSTEP2_PIN")]
-    GetMicrostep2Pin(bool),
-
-    #[deku(id = "GET_MICROSTEP1_PIN")]
-    GetMicrostep1Pin(bool),
-
-    #[deku(id = "GET_DISABLE_PIN")]
-    GetDisablePin(bool),
-
     #[deku(id = "GET_MICROSTEP_TIME")]
     GetMicrostepTime(u32),
 
@@ -554,26 +340,11 @@ enum Response {
     #[deku(id = "GET_MICROSTEP_CURRENT")]
     GetMicrostepCurrent(i16, i16),
 
-    #[deku(id = "GET_STOPPED")]
-    GetStopped(bool),
-
-    #[deku(id = "GET_PWM_MODE")]
-    GetPwmMode(bool),
-
     #[deku(id = "GET_CURRENT_SCALE")]
     GetCurrentScale(u8),
 
     #[deku(id = "GET_TEMPERATURE")]
     GetTemperature(#[deku(bits = 8)] TemperatureThreshold),
-
-    #[deku(id = "GET_OPEN_LOAD")]
-    GetOpenLoad(#[deku(bits = 8)] PhaseStatus),
-
-    #[deku(id = "GET_LOW_SIDE_SHORT")]
-    GetLowSideShort(#[deku(bits = 8)] PhaseStatus),
-
-    #[deku(id = "GET_GROUND_SHORT")]
-    GetGroundShort(#[deku(bits = 8)] PhaseStatus),
 
     #[deku(id = "GET_OVERTEMPERATURE")]
     GetOverTemperature(#[deku(bits = 8)] OverTemperatureStatus),
@@ -584,6 +355,12 @@ enum Response {
         #[deku(count = "len")]
         samples: Vec<f64>,
     },
+
+    #[deku(id = "GET_VALVE")]
+    GetValve(bool),
+
+    #[deku(id = "SET_VALVE")]
+    SetValve,
 
     #[deku(id = "FAIL")]
     Fail,
@@ -682,10 +459,15 @@ async fn main(spawner: Spawner) -> ! {
 
     let sensor = FlowSensor::new(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO1);
     spawner.spawn(run_flow_rate_monitor(sensor)).unwrap();
-    run_coordinator(peripherals.USB_DEVICE, tmc).await;
+    let valve = Output::new(peripherals.GPIO4, Low, OutputConfig::default());
+    run_coordinator(peripherals.USB_DEVICE, tmc, valve).await;
 }
 
-async fn run_coordinator<'a>(device: USB_DEVICE<'a>, tmc: TmcHandle<'a>) -> ! {
+async fn run_coordinator<'a>(
+    device: USB_DEVICE<'a>,
+    tmc: TmcHandle<'a>,
+    mut valve: Output<'a>,
+) -> ! {
     let mut stream = PacketStream::new(device, Duration::from_secs(1));
     loop {
         let Ok(packet) = stream.read().await else {
@@ -695,7 +477,7 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>, tmc: TmcHandle<'a>) -> ! {
 
         debug!("Received packet: {=[?]}", &packet[..]);
         let response = match Request::from_bytes((&packet, 0)) {
-            Ok((_, packet)) => match handle_request(packet, &tmc).await {
+            Ok((_, packet)) => match handle_request(packet, &tmc, &mut valve).await {
                 Ok(response) => response,
                 Err(err) => {
                     info!("Handle request error: {}", err);
@@ -714,7 +496,11 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>, tmc: TmcHandle<'a>) -> ! {
     }
 }
 
-async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Response> {
+async fn handle_request<'a>(
+    packet: Request,
+    tmc: &TmcHandle<'a>,
+    valve: &mut Output<'a>,
+) -> Result<Response> {
     let response = match packet {
         Request::Init => Response::Init,
         Request::FlowSensorInfo => Response::FlowSensorInfo(FLOW_INFO.get_cloned()),
@@ -742,53 +528,10 @@ async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Resp
             tmc.set_stop_mode(mode)?;
             Response::SetStopMode
         }
-        Request::GetPowerdownDurationS => {
-            Response::GetPowerdownDurationS(tmc.powerdown_duration_s()?)
-        }
-        Request::SetPowerdownDurationS(duration) => {
-            tmc.set_powerdown_duration_s(duration)?;
-            Response::SetPowerdownDurationS
-        }
-        Request::GetPowerdownDelayS => Response::GetPowerdownDelayS(tmc.powerdown_delay_s()?),
-        Request::SetPowerdownDelayS(delay) => {
-            tmc.set_powerdown_delay_s(delay)?;
-            Response::SetPowerdownDelayS
-        }
         Request::GetMicrosteps => Response::GetMicrosteps(tmc.microsteps()),
         Request::SetMicrosteps(n) => {
             tmc.set_microsteps(n)?;
             Response::SetMicrosteps
-        }
-        Request::GetFilterStepPulses => Response::GetFilterStepPulses(tmc.filter_step_pulses()?),
-        Request::SetFilterStepPulses(enable) => {
-            tmc.set_filter_step_pulses(enable)?;
-            Response::SetFilterStepPulses
-        }
-        Request::GetDoubleEdgeStep => Response::GetDoubleEdgeStep(tmc.double_edge_step()),
-        Request::SetDoubleEdgeStep(enable) => {
-            tmc.set_double_edge_step(enable)?;
-            Response::SetDoubleEdgeStep
-        }
-        Request::GetInterpolateMicrosteps => {
-            Response::GetInterpolateMicrosteps(tmc.interpolate_microsteps()?)
-        }
-        Request::SetInterpolateMicrosteps(enable) => {
-            tmc.set_interpolate_microsteps(enable)?;
-            Response::SetInterpolateMicrosteps
-        }
-        Request::GetShortSupplyProtect => {
-            Response::GetShortSupplyProtect(tmc.short_supply_protect()?)
-        }
-        Request::SetShortSupplyProtect(enable) => {
-            tmc.set_short_supply_protect(enable)?;
-            Response::SetShortSupplyProtect
-        }
-        Request::GetShortGroundProtect => {
-            Response::GetShortGroundProtect(tmc.short_ground_protect()?)
-        }
-        Request::SetShortGroundProtect(enable) => {
-            tmc.set_short_ground_protect(enable)?;
-            Response::SetShortGroundProtect
         }
         Request::GetBlankTime => Response::GetBlankTime(tmc.blank_time()?),
         Request::SetBlankTime(time) => {
@@ -829,16 +572,6 @@ async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Resp
             tmc.set_max_amplitude_change(change)?;
             Response::SetMaxAmplitudeChange
         }
-        Request::GetPwmAutogradient => Response::GetPwmAutogradient(tmc.pwm_autograd()?),
-        Request::SetPwmAutogradient(enable) => {
-            tmc.set_pwm_autograd(enable)?;
-            Response::SetPwmAutogradient
-        }
-        Request::GetPwnAutoscale => Response::GetPwnAutoscale(tmc.pwm_autoscale()?),
-        Request::SetPwnAutoscale(enable) => {
-            tmc.set_pwm_autoscale(enable)?;
-            Response::SetPwnAutoscale
-        }
         Request::GetPwmFrequency => Response::GetPwmFrequency(tmc.pwm_frequency()?),
         Request::SetPwmFrequency(frequency) => {
             tmc.set_pwm_frequency(frequency)?;
@@ -854,19 +587,6 @@ async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Resp
             tmc.set_pwm_offset(offset)?;
             Response::SetPwmOffset
         }
-        Request::GetChargePumpUndervoltage => {
-            Response::GetChargePumpUndervoltage(tmc.charge_pump_undervoltage()?)
-        }
-        Request::GetDriverError => Response::GetDriverError(tmc.driver_error()?),
-        Request::GetIsReset => Response::GetIsReset(tmc.is_reset()?),
-        Request::GetDirectionPin => Response::GetDirectionPin(tmc.direction_pin()?),
-        Request::GetDisablePwmPin => Response::GetDisablePwmPin(tmc.disable_pwm_pin()?),
-        Request::GetStepPin => Response::GetStepPin(tmc.step_pin()?),
-        Request::GetPowerdownUartPin => Response::GetPowerdownUartPin(tmc.powerdown_uart_pin()?),
-        Request::GetDiagnosticPin => Response::GetDiagnosticPin(tmc.diagnostic_pin()?),
-        Request::GetMicrostep2Pin => Response::GetMicrostep2Pin(tmc.microstep2_pin()?),
-        Request::GetMicrostep1Pin => Response::GetMicrostep1Pin(tmc.microstep1_pin()?),
-        Request::GetDisablePin => Response::GetDisablePin(tmc.disable_pin()?),
         Request::GetMicrostepTime => Response::GetMicrostepTime(tmc.microstep_time()?),
         Request::GetMotorLoad => Response::GetMotorLoad(tmc.motor_load()?),
         Request::GetMicrostepPosition => Response::GetMicrostepPosition(tmc.microstep_position()?),
@@ -874,13 +594,8 @@ async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Resp
             let (a, b) = tmc.microstep_current()?;
             Response::GetMicrostepCurrent(a, b)
         }
-        Request::GetStopped => Response::GetStopped(tmc.stopped()?),
-        Request::GetPwmMode => Response::GetPwmMode(tmc.pwm_mode()?),
         Request::GetCurrentScale => Response::GetCurrentScale(tmc.current_scale()?),
         Request::GetTemperature => Response::GetTemperature(tmc.temperature()?),
-        Request::GetOpenLoad => Response::GetOpenLoad(tmc.open_load()?),
-        Request::GetLowSideShort => Response::GetLowSideShort(tmc.low_side_short()?),
-        Request::GetGroundShort => Response::GetGroundShort(tmc.ground_short()?),
         Request::GetOverTemperature => Response::GetOverTemperature(tmc.over_temperature()?),
         Request::GetFlowHistory => {
             let samples: Vec<f64> = FLOW_HISTORY.lock(|history| {
@@ -894,6 +609,15 @@ async fn handle_request<'a>(packet: Request, tmc: &TmcHandle<'a>) -> Result<Resp
                 len: samples.len() as u16,
                 samples,
             }
+        }
+        Request::GetValve => Response::GetValve(valve.is_set_high()),
+        Request::SetValve(open) => {
+            if open {
+                valve.set_high();
+            } else {
+                valve.set_low();
+            }
+            Response::SetValve
         }
     };
     Ok(response)

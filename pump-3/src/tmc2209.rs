@@ -709,10 +709,6 @@ impl<'a> Tmc2209<'a> {
                 stallguard_threshold: 0,
             }),
             /*
-            response_delay: 3,
-            powerdown_delay: 20,
-            pwm_threshold: 999999,
-            velocity: 0,
             coolstep_threshold: 0,
             stallguard_threshold: 0,
             coolstep_config: CoolstepConfig {
@@ -721,18 +717,6 @@ impl<'a> Tmc2209<'a> {
                 stallguard_hysteresis: 0,
                 current_upstep: 0,
                 stallguard_threshold: 0,
-            },
-            driver_config: DriverConfig {
-                disable_short_supply_protect: false,
-                disable_short_ground_protect: false,
-                double_edge_step: false,
-                interpolate_microsteps: true,
-                microstep_resolution: MicrostepResolution::M16,
-                low_sense_resistor_voltage: false,
-                blank_time: BlankTime::B36,
-                hysteresis_end: -3,
-                hysteresis_start: 4,
-                decay_time: 5,
             },
             pwm_config: PwmConfig {
                 driver_switch_autoscale_limit: 12,
@@ -761,13 +745,20 @@ impl<'a> Tmc2209<'a> {
             }),
         )?;
 
+        // Set to 3 * 8 bit times to work with multi-node by default.
+        tmc.set_response_delay(3)?;
+
         let current_config = tmc.current_config.get_cloned();
         tmc.write_register(CURRENT_CONFIG_REG, FrameData::CurrentConfig(current_config))?;
+
+        tmc.set_powerdown_delay_s(0.5)?;
+        tmc.set_pwm_max_rpm(200.0)?;
+        // Disable uart set velocity.
+        tmc.set_velocity(0.0)?;
 
         let mut driver_config = tmc.driver_config()?;
         driver_config.low_sense_resistor_voltage = true;
         driver_config.double_edge_step = false;
-        tmc.write_register(DRIVER_CONFIG_REG, FrameData::DriverConfig(driver_config))?;
 
         tmc.microsteps
             .set(driver_config.microstep_resolution.into());
