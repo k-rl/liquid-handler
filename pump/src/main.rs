@@ -230,7 +230,7 @@ enum Request {
 #[deku(id_type = "u8", endian = "big")]
 enum Response {
     #[deku(id = "INIT")]
-    Init,
+    Init(u8),
 
     #[deku(id = "FLOW_SENSOR_INFO")]
     FlowSensorInfo(FlowSensorInfo),
@@ -502,7 +502,7 @@ async fn handle_request<'a>(
     valve: &mut Output<'a>,
 ) -> Result<Response> {
     let response = match packet {
-        Request::Init => Response::Init,
+        Request::Init => Response::Init(0),
         Request::FlowSensorInfo => Response::FlowSensorInfo(FLOW_INFO.get_cloned()),
         Request::SetFlowUlPerMin(ul_per_min) => {
             UL_PER_MIN.set(ul_per_min);
