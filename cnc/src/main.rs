@@ -6,11 +6,10 @@
     holding buffers for the duration of a data transfer."
 )]
 
-mod mutex;
 mod stepper;
-mod usb;
 
-use crate::{mutex::Mutex, stepper::Stepper, usb::PacketStream};
+use crate::stepper::Stepper;
+use common::{mutex::Mutex, usb::PacketStream};
 use defmt::{debug, info, Debug2Format, Format};
 use deku::prelude::*;
 use embassy_executor::Spawner;

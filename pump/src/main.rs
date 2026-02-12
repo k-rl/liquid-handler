@@ -7,18 +7,15 @@
 )]
 
 mod flow_sensor;
-mod mutex;
 mod tmc2209;
-mod usb;
 
 use crate::{
     flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType},
-    mutex::Mutex,
     tmc2209::{
         BlankTime, OverTemperatureStatus, PwmFrequency, StopMode, TemperatureThreshold, Tmc2209,
     },
-    usb::PacketStream,
 };
+use common::{mutex::Mutex, usb::PacketStream};
 use alloc::{sync::Arc, vec::Vec};
 use core::result;
 use defmt::{debug, info, Debug2Format, Format};

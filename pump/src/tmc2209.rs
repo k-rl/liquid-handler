@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::mutex::Mutex;
+use common::mutex::Mutex;
 use core::result;
 use defmt::{debug, info, Debug2Format, Format};
 use deku::ctx::BitSize;
