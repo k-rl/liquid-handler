@@ -86,6 +86,8 @@ const GET_OVERTEMPERATURE: u8 = 0x49;
 const GET_FLOW_HISTORY: u8 = 0x4A;
 const GET_VALVE: u8 = 0x4B;
 const SET_VALVE: u8 = 0x4C;
+const GET_AIR_STOP: u8 = 0x4D;
+const SET_AIR_STOP: u8 = 0x4E;
 const FAIL: u8 = 0xFF;
 
 const FLOW_HISTORY_LEN: usize = 1000;
@@ -221,6 +223,12 @@ enum Request {
 
     #[deku(id = "SET_VALVE")]
     SetValve(bool),
+
+    #[deku(id = "GET_AIR_STOP")]
+    GetAirStop,
+
+    #[deku(id = "SET_AIR_STOP")]
+    SetAirStop(bool),
 }
 
 #[derive(Debug, Clone, DekuRead, DekuWrite, Format)]
@@ -359,6 +367,12 @@ enum Response {
     #[deku(id = "SET_VALVE")]
     SetValve,
 
+    #[deku(id = "GET_AIR_STOP")]
+    GetAirStop(bool),
+
+    #[deku(id = "SET_AIR_STOP")]
+    SetAirStop,
+
     #[deku(id = "FAIL")]
     Fail,
 }
@@ -403,6 +417,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 type TmcHandle<'a> = Arc<Tmc2209<'a>>;
 
 static RPM: Mutex<f64> = Mutex::new(0.0);
+static AIR_STOP: Mutex<bool> = Mutex::new(false);
 static UL_PER_MIN: Mutex<f64> = Mutex::new(f64::NAN);
 static FLOW_HISTORY: Mutex<Deque<f64, FLOW_HISTORY_LEN>> = Mutex::new(Deque::new());
 static FLOW_INFO: Mutex<FlowSensorInfo> = Mutex::new(FlowSensorInfo {
@@ -616,6 +631,11 @@ async fn handle_request<'a>(
             }
             Response::SetValve
         }
+        Request::GetAirStop => Response::GetAirStop(AIR_STOP.get_cloned()),
+        Request::SetAirStop(enabled) => {
+            AIR_STOP.set(enabled);
+            Response::SetAirStop
+        }
     };
     Ok(response)
 }
@@ -635,6 +655,9 @@ async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>) -> ! {
     loop {
         match sensor.read().await {
             Ok(info) => {
+                if AIR_STOP.get_cloned() && info.air_in_line {
+                    RPM.set(0.0);
+                }
                 FLOW_INFO.set(info);
                 FLOW_HISTORY.lock(|history| {
                     if history.is_full() {
