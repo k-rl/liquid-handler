@@ -10,7 +10,6 @@ mod stepper;
 
 use crate::stepper::Stepper;
 use common::{mutex::Mutex, usb::PacketStream};
-use defmt::{debug, info, Debug2Format, Format};
 use deku::prelude::*;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -27,7 +26,7 @@ use esp_hal::{
     },
 };
 
-use panic_rtt_target as _;
+use panic_halt as _;
 
 extern crate alloc;
 
@@ -38,7 +37,7 @@ const SET_POS: u8 = 0x02;
 const GET_POS: u8 = 0x03;
 const FAIL: u8 = 0xFF;
 
-#[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
+#[derive(Debug, Clone, Copy, DekuRead, DekuWrite)]
 #[deku(id_type = "u8", endian = "big")]
 enum Request {
     #[deku(id = "INIT")]
@@ -48,13 +47,13 @@ enum Request {
     Home,
 
     #[deku(id = "SET_POS")]
-    SetPos(f64, f64, f64),
+    SetPos(i64, i64, i64),
 
     #[deku(id = "GET_POS")]
     GetPos,
 }
 
-#[derive(Debug, Clone, DekuRead, DekuWrite, Format)]
+#[derive(Debug, Clone, DekuRead, DekuWrite)]
 #[deku(id_type = "u8", endian = "big")]
 enum Response {
     #[deku(id = "INIT")]
@@ -67,7 +66,7 @@ enum Response {
     SetPos,
 
     #[deku(id = "GET_POS")]
-    GetPos(f64, f64, f64),
+    GetPos(i64, i64, i64),
 
     #[deku(id = "FAIL")]
     Fail,
@@ -75,20 +74,18 @@ enum Response {
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-static TARGET_POS: Mutex<(f64, f64, f64)> = Mutex::new((0.0, 0.0, 0.0));
-static POS: Mutex<(f64, f64, f64)> = Mutex::new((0.0, 0.0, 0.0));
+static TARGET_POS: Mutex<(i64, i64, i64)> = Mutex::new((0, 0, 0));
+static POS: Mutex<(i64, i64, i64)> = Mutex::new((0, 0, 0));
 static HOME_MODE: Mutex<bool> = Mutex::new(true);
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    rtt_target::rtt_init_defmt!();
     let peripherals = esp_hal::init(esp_hal::Config::default().with_cpu_clock(CpuClock::max()));
 
     esp_alloc::heap_allocator!(#[unsafe(link_section = ".dram2_uninit")] size: 73744);
     let timers = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timers.timer0);
 
-    info!("Embassy initialized.");
     Timer::after_secs(2).await;
 
     let mut watchdog = timers.wdt;
@@ -135,21 +132,15 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>) -> ! {
     let mut stream = PacketStream::new(device, Duration::from_secs(1));
     loop {
         let Ok(packet) = stream.read().await else {
-            info!("Packet read failed.");
             continue;
         };
 
-        debug!("Received packet: {=[?]}", &packet[..]);
         let response = match Request::from_bytes((&packet, 0)) {
             Ok((_, packet)) => handle_request(packet),
-            Err(err) => {
-                info!("Failed to decode request: {:?}", Debug2Format(&err));
-                Response::Fail
-            }
+            Err(_) => Response::Fail,
         };
 
         let response_bytes = response.to_bytes().unwrap();
-        debug!("Sending response: {=[?]}", &response_bytes[..]);
         stream.write(&response_bytes).await;
     }
 }
@@ -191,32 +182,37 @@ fn run_steppers(
     step_timer
         .start(time::Duration::from_micros(step_us))
         .unwrap();
-    info!("Steppers initialized.");
+
+    x_motor.set_max_speed(1000.0);
+    x_motor.set_accel(1000.0);
+    y_motor.set_max_speed(1000.0);
+    y_motor.set_accel(1000.0);
+    z_motor.set_max_speed(1000.0);
+    z_motor.set_accel(1000.0);
+
     loop {
         if HOME_MODE.get_cloned() {
-            info!("Homing...");
             z_motor.home();
             x_motor.home();
             y_motor.home();
-            TARGET_POS.set((0.0, 0.0, 0.0));
-            POS.set((0.0, 0.0, 0.0));
+            TARGET_POS.set((0, 0, 0));
+            POS.set((0, 0, 0));
             HOME_MODE.set(false);
-            info!("Homing complete.");
         }
 
         let (tx, ty, tz) = TARGET_POS.get_cloned();
-        x_motor.set_target_pos(tx as i64);
-        y_motor.set_target_pos(ty as i64);
-        z_motor.set_target_pos(tz as i64);
+        x_motor.set_target_pos(tx);
+        y_motor.set_target_pos(ty);
+        z_motor.set_target_pos(tz);
 
         x_motor.step();
         y_motor.step();
         z_motor.step();
 
         POS.set((
-            x_motor.pos() as f64,
-            y_motor.pos() as f64,
-            z_motor.pos() as f64,
+            x_motor.pos(),
+            y_motor.pos(),
+            z_motor.pos(),
         ));
 
         step_timer.wait();

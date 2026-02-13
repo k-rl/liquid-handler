@@ -10,24 +10,21 @@ path = "./src/main.rs"
 
 [dependencies]
 common = { path = "../common" }
-defmt = { version = "1.0.1", features = ["alloc"] }
 deku = { version = "0.19", default-features = false, features = [
   "alloc",
   "bits",
 ] }
-esp-alloc = { version = "0.9.0", features = ["defmt", "esp32s3"] }
+esp-alloc = { version = "0.9.0", features = ["esp32s3"] }
 esp-bootloader-esp-idf = { version = "0.4.0", features = ["esp32s3"] }
-esp-hal = { version = "1.0.0", features = ["defmt", "esp32s3", "unstable"] }
+esp-hal = { version = "1.0.0", features = ["esp32s3", "unstable"] }
 esp-rtos = { version = "0.2.0", features = [
-  "defmt",
   "embassy",
   "esp-alloc",
   "esp32s3",
 ] }
-embassy-executor = { version = "0.9.1", features = ["defmt"] }
-embassy-time = { version = "0.5.0", features = ["defmt"] }
-panic-rtt-target = { version = "0.2.0", features = ["defmt"] }
-rtt-target = { version = "0.6.1", features = ["defmt"] }
+embassy-executor = { version = "0.9.1" }
+embassy-time = { version = "0.5.0" }
+panic-halt = "1.0.0"
 
 [patch.crates-io]
 bitvec = { git = "https://github.com/ferrilab/ferrilab.git", package = "bitvec", rev = "aa1c33c934e734d0b05fe0b2ab61dfff8707de11" }

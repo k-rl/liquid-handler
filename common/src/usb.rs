@@ -1,6 +1,5 @@
 use alloc::{vec, vec::Vec};
 use core::{result, slice};
-use defmt::{debug, info};
 use embassy_time::{Duration, TimeoutError};
 use embedded_io_async::{Read, Write};
 use esp_hal::{peripherals::USB_DEVICE, usb_serial_jtag::UsbSerialJtag, Async};
@@ -66,7 +65,6 @@ impl<'a> PacketStream<'a> {
             out.push(0);
         }
 
-        debug!("Raw response: {=[?]}", &out[..]);
         Write::write_all(&mut self.usb, &out).await.unwrap()
     }
 
@@ -80,7 +78,6 @@ impl<'a> PacketStream<'a> {
         loop {
             let l = vec.len();
             vec.resize(l + size as usize - 1, 0);
-            debug!("Reading {} bytes", size);
             embassy_time::with_timeout(
                 self.timeout,
                 Read::read_exact(&mut self.usb, &mut vec[l..]),
@@ -95,7 +92,6 @@ impl<'a> PacketStream<'a> {
                 while byte != 0 {
                     byte = self.read_byte().await;
                 }
-                info!("Received unexpected zero byte.");
                 break Err(Error::ZeroByte);
             }
 

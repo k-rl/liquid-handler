@@ -2,7 +2,6 @@
 runner = "./flash_chip.sh"
 
 [env]
-DEFMT_LOG = "info"
 ESP_HAL_EMBASSY_CONFIG_LOW_POWER_WAIT = { value = "false" }
 
 [build]

@@ -5,9 +5,8 @@ rust-version = "1.86"
 version = "0.1.0"
 
 [dependencies]
-defmt = { version = "1.0.1", features = ["alloc"] }
 embedded-io-async = "0.7.0"
-esp-hal = { version = "1.0.0", features = ["defmt", "esp32s3", "unstable"] }
-embassy-time = { version = "0.5.0", features = ["defmt"] }
-embassy-sync = { version = "0.7.2", features = ["defmt"] }
+esp-hal = { version = "1.0.0", features = ["esp32s3", "unstable"] }
+embassy-time = { version = "0.5.0" }
+embassy-sync = { version = "0.7.2" }
 thiserror = { version = "2.0.17", default-features = false }
