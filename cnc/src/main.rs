@@ -8,6 +8,7 @@
 
 mod stepper;
 
+use alloc::sync::Arc;
 use crate::stepper::Stepper;
 use common::{mutex::Mutex, usb::PacketStream};
 use deku::prelude::*;
@@ -30,11 +31,18 @@ use panic_halt as _;
 
 extern crate alloc;
 
+type Motor = Arc<Mutex<Stepper<'static>>>;
+
 // Request/response codes.
 const INIT: u8 = 0x00;
 const HOME: u8 = 0x01;
-const SET_POS: u8 = 0x02;
-const GET_POS: u8 = 0x03;
+const IS_HOMING: u8 = 0x02;
+const SET_POS: u8 = 0x03;
+const GET_POS: u8 = 0x04;
+const SET_SPEED: u8 = 0x05;
+const GET_SPEED: u8 = 0x06;
+const SET_ACCEL: u8 = 0x07;
+const GET_ACCEL: u8 = 0x08;
 const FAIL: u8 = 0xFF;
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite)]
@@ -46,11 +54,26 @@ enum Request {
     #[deku(id = "HOME")]
     Home,
 
+    #[deku(id = "IS_HOMING")]
+    IsHoming,
+
     #[deku(id = "SET_POS")]
     SetPos(i64, i64, i64),
 
     #[deku(id = "GET_POS")]
     GetPos,
+
+    #[deku(id = "SET_SPEED")]
+    SetSpeed(f64),
+
+    #[deku(id = "GET_SPEED")]
+    GetSpeed,
+
+    #[deku(id = "SET_ACCEL")]
+    SetAccel(f64),
+
+    #[deku(id = "GET_ACCEL")]
+    GetAccel,
 }
 
 #[derive(Debug, Clone, DekuRead, DekuWrite)]
@@ -62,11 +85,26 @@ enum Response {
     #[deku(id = "HOME")]
     Home,
 
+    #[deku(id = "IS_HOMING")]
+    IsHoming(bool),
+
     #[deku(id = "SET_POS")]
     SetPos,
 
     #[deku(id = "GET_POS")]
     GetPos(i64, i64, i64),
+
+    #[deku(id = "SET_SPEED")]
+    SetSpeed,
+
+    #[deku(id = "GET_SPEED")]
+    GetSpeed(f64),
+
+    #[deku(id = "SET_ACCEL")]
+    SetAccel,
+
+    #[deku(id = "GET_ACCEL")]
+    GetAccel(f64),
 
     #[deku(id = "FAIL")]
     Fail,
@@ -74,8 +112,6 @@ enum Response {
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-static TARGET_POS: Mutex<(i64, i64, i64)> = Mutex::new((0, 0, 0));
-static POS: Mutex<(i64, i64, i64)> = Mutex::new((0, 0, 0));
 static HOME_MODE: Mutex<bool> = Mutex::new(true);
 
 #[esp_rtos::main]
@@ -98,21 +134,25 @@ async fn main(spawner: Spawner) -> ! {
     // Y: A2=GPIO3, A3=GPIO4, A4=GPIO11, A5=GPIO12
     // Z: D8=GPIO17, D7=GPIO10, D6=GPIO9, D5=GPIO8
     // Limit switch pins: X=D10(GPIO21), Y=D11(GPIO38), Z=D9(GPIO18)
-    let x_motor = Stepper::new(
+    let x_motor: Motor = Arc::new(Mutex::new(Stepper::new(
         peripherals.GPIO7, peripherals.GPIO6,
         peripherals.GPIO5, peripherals.GPIO2,
         peripherals.GPIO21,
-    );
-    let y_motor = Stepper::new(
+    )));
+    let y_motor: Motor = Arc::new(Mutex::new(Stepper::new(
         peripherals.GPIO3, peripherals.GPIO4,
         peripherals.GPIO11, peripherals.GPIO12,
         peripherals.GPIO38,
-    );
-    let z_motor = Stepper::new(
+    )));
+    let z_motor: Motor = Arc::new(Mutex::new(Stepper::new(
         peripherals.GPIO17, peripherals.GPIO10,
         peripherals.GPIO9, peripherals.GPIO8,
         peripherals.GPIO18,
-    );
+    )));
+
+    let x_clone = x_motor.clone();
+    let y_clone = y_motor.clone();
+    let z_clone = z_motor.clone();
 
     let irc = SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     static mut STACK: Stack<8192> = Stack::new();
@@ -122,13 +162,13 @@ async fn main(spawner: Spawner) -> ! {
         irc.software_interrupt0,
         irc.software_interrupt1,
         unsafe { &mut STACK },
-        move || run_steppers(x_motor, y_motor, z_motor, timers.timer1),
+        move || run_steppers(x_clone, y_clone, z_clone, timers.timer1),
     );
 
-    run_coordinator(peripherals.USB_DEVICE).await;
+    run_coordinator(peripherals.USB_DEVICE, x_motor, y_motor, z_motor).await;
 }
 
-async fn run_coordinator<'a>(device: USB_DEVICE<'a>) -> ! {
+async fn run_coordinator<'a>(device: USB_DEVICE<'a>, x: Motor, y: Motor, z: Motor) -> ! {
     let mut stream = PacketStream::new(device, Duration::from_secs(1));
     loop {
         let Ok(packet) = stream.read().await else {
@@ -136,7 +176,7 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>) -> ! {
         };
 
         let response = match Request::from_bytes((&packet, 0)) {
-            Ok((_, packet)) => handle_request(packet),
+            Ok((_, packet)) => handle_request(packet, &x, &y, &z),
             Err(_) => Response::Fail,
         };
 
@@ -145,20 +185,45 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>) -> ! {
     }
 }
 
-fn handle_request(packet: Request) -> Response {
+fn handle_request(packet: Request, x: &Motor, y: &Motor, z: &Motor) -> Response {
     match packet {
         Request::Init => Response::Init(1),
         Request::Home => {
             HOME_MODE.set(true);
             Response::Home
         }
-        Request::SetPos(x, y, z) => {
-            TARGET_POS.set((x, y, z));
+        Request::SetPos(px, py, pz) => {
+            x.lock(|m| m.set_target_pos(px));
+            y.lock(|m| m.set_target_pos(py));
+            z.lock(|m| m.set_target_pos(pz));
             Response::SetPos
         }
         Request::GetPos => {
-            let (x, y, z) = POS.get_cloned();
-            Response::GetPos(x, y, z)
+            let px = x.lock(|m| m.pos());
+            let py = y.lock(|m| m.pos());
+            let pz = z.lock(|m| m.pos());
+            Response::GetPos(px, py, pz)
+        }
+        Request::SetSpeed(s) => {
+            x.lock(|m| m.set_max_speed(s));
+            y.lock(|m| m.set_max_speed(s));
+            z.lock(|m| m.set_max_speed(s));
+            Response::SetSpeed
+        }
+        Request::GetSpeed => {
+            Response::GetSpeed(x.lock(|m| m.max_speed()))
+        }
+        Request::SetAccel(a) => {
+            x.lock(|m| m.set_accel(a));
+            y.lock(|m| m.set_accel(a));
+            z.lock(|m| m.set_accel(a));
+            Response::SetAccel
+        }
+        Request::GetAccel => {
+            Response::GetAccel(x.lock(|m| m.accel()))
+        }
+        Request::IsHoming => {
+            Response::IsHoming(HOME_MODE.get_cloned())
         }
     }
 }
@@ -172,9 +237,9 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
 }
 
 fn run_steppers(
-    mut x_motor: Stepper<'static>,
-    mut y_motor: Stepper<'static>,
-    mut z_motor: Stepper<'static>,
+    x: Motor,
+    y: Motor,
+    z: Motor,
     timer: impl esp_hal::timer::Timer + Into<AnyTimer<'static>>,
 ) -> ! {
     let step_us = 10;
@@ -183,37 +248,17 @@ fn run_steppers(
         .start(time::Duration::from_micros(step_us))
         .unwrap();
 
-    x_motor.set_max_speed(1000.0);
-    x_motor.set_accel(1000.0);
-    y_motor.set_max_speed(1000.0);
-    y_motor.set_accel(1000.0);
-    z_motor.set_max_speed(1000.0);
-    z_motor.set_accel(1000.0);
-
     loop {
         if HOME_MODE.get_cloned() {
-            z_motor.home();
-            x_motor.home();
-            y_motor.home();
-            TARGET_POS.set((0, 0, 0));
-            POS.set((0, 0, 0));
+            z.lock(|m| m.home());
+            x.lock(|m| m.home());
+            y.lock(|m| m.home());
             HOME_MODE.set(false);
         }
 
-        let (tx, ty, tz) = TARGET_POS.get_cloned();
-        x_motor.set_target_pos(tx);
-        y_motor.set_target_pos(ty);
-        z_motor.set_target_pos(tz);
-
-        x_motor.step();
-        y_motor.step();
-        z_motor.step();
-
-        POS.set((
-            x_motor.pos(),
-            y_motor.pos(),
-            z_motor.pos(),
-        ));
+        x.lock(|m| m.step());
+        y.lock(|m| m.step());
+        z.lock(|m| m.step());
 
         step_timer.wait();
     }

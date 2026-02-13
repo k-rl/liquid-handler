@@ -40,12 +40,12 @@ impl<'a> Stepper<'a> {
             pins,
             limit_switch: Input::new(limit_switch, InputConfig::default()),
             v: 0.0,
-            a: 0.0,
+            a: 1000.0,
             elapsed_us: 0,
             last_time: Instant::now(),
             pos: 0,
             target_pos: 0,
-            max_speed: 0.0,
+            max_speed: 1000.0,
             phase: 0,
             backlash: 0,
             backlash_remaining: 0,
@@ -161,12 +161,20 @@ impl<'a> Stepper<'a> {
         self.pos
     }
 
+    pub fn max_speed(&self) -> f64 {
+        self.max_speed
+    }
+
     pub fn set_max_speed(&mut self, speed: f64) {
         self.max_speed = speed;
     }
 
     pub fn set_target_pos(&mut self, pos: i64) {
         self.target_pos = pos;
+    }
+
+    pub fn accel(&self) -> f64 {
+        self.a
     }
 
     pub fn set_accel(&mut self, accel: f64) {
