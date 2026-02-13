@@ -125,6 +125,7 @@ impl<'a> Stepper<'a> {
         // Drive into limit switch.
         while self.limit_switch.is_low() {
             self.step_motor(false);
+            Delay::new().delay_millis(1);
         }
 
         // Measure backlash: 5 cycles of back-off then re-approach.
