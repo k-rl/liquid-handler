@@ -95,11 +95,12 @@ impl<'a> PacketStream<'a> {
                 break Err(Error::ZeroByte);
             }
 
+            let prev_size = size;
             size = self.read_byte().await;
-            match size {
-                0 => break Ok(vec),
-                255 => continue,
-                _ => vec.push(0),
+            if size == 0 {
+                break Ok(vec);
+            } else if prev_size != 255 {
+                vec.push(0);
             }
         }
     }

@@ -471,6 +471,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let sensor = FlowSensor::new(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO1);
     spawner.spawn(run_flow_rate_monitor(sensor)).unwrap();
+    spawner.spawn(run_reset_monitor(Arc::clone(&tmc))).unwrap();
     let valve = Output::new(peripherals.GPIO4, Low, OutputConfig::default());
     run_coordinator(peripherals.USB_DEVICE, tmc, valve).await;
 }
@@ -504,7 +505,7 @@ async fn run_coordinator<'a>(
 
         let response_bytes = response.to_bytes().unwrap();
         debug!("Sending response: {=[?]}", &response_bytes[..]);
-        stream.write(&response.to_bytes().unwrap()).await;
+        stream.write(&response_bytes).await;
     }
 }
 
@@ -671,6 +672,20 @@ async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>) -> ! {
             }
         }
         Timer::after_millis(50).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn run_reset_monitor(tmc: TmcHandle<'static>) -> ! {
+    loop {
+        if tmc.is_reset().unwrap() {
+            info!("TMC2209 reset detected, re-applying current config.");
+            let running = tmc.rms_amps().unwrap();
+            let stopped = tmc.stopped_rms_amps().unwrap();
+            tmc.set_rms_amps(running).unwrap();
+            tmc.set_stopped_rms_amps(stopped).unwrap();
+        }
+        Timer::after_secs(1).await;
     }
 }
 
