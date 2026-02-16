@@ -1,8 +1,8 @@
 use core::cell::RefCell;
-use embassy_sync::blocking_mutex::{raw::CriticalSectionRawMutex, Mutex as EmbassyMutex};
+use embassy_sync::blocking_mutex::Mutex as EmbassyMutex;
 
 pub struct Mutex<T> {
-    mutex: EmbassyMutex<CriticalSectionRawMutex, RefCell<T>>,
+    mutex: EmbassyMutex<esp_sync::RawMutex, RefCell<T>>,
 }
 
 impl<T> Mutex<T> {
