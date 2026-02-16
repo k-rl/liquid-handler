@@ -15,8 +15,8 @@ use crate::{
         BlankTime, OverTemperatureStatus, PwmFrequency, StopMode, TemperatureThreshold, Tmc2209,
     },
 };
-use common::{mutex::Mutex, usb::PacketStream};
 use alloc::{sync::Arc, vec::Vec};
+use common::{mutex::Mutex, usb::PacketStream};
 use core::result;
 use defmt::{debug, info, Debug2Format, Format};
 use deku::prelude::*;
@@ -54,35 +54,7 @@ const GET_STOP_RMS_AMPS: u8 = 0x07;
 const SET_STOP_RMS_AMPS: u8 = 0x08;
 const GET_STOP_MODE: u8 = 0x09;
 const SET_STOP_MODE: u8 = 0x0A;
-const GET_MICROSTEPS: u8 = 0x0F;
-const SET_MICROSTEPS: u8 = 0x10;
-const GET_BLANK_TIME: u8 = 0x1B;
-const SET_BLANK_TIME: u8 = 0x1C;
-const GET_HYSTERESIS_END: u8 = 0x1D;
-const SET_HYSTERESIS_END: u8 = 0x1E;
-const GET_HYSTERESIS_START: u8 = 0x1F;
-const SET_HYSTERESIS_START: u8 = 0x20;
-const GET_DECAY_TIME: u8 = 0x21;
-const SET_DECAY_TIME: u8 = 0x22;
-const GET_PWM_MAX_RPM: u8 = 0x23;
-const SET_PWM_MAX_RPM: u8 = 0x24;
-const GET_DRIVER_SWITCH_AUTOSCALE_LIMIT: u8 = 0x25;
-const SET_DRIVER_SWITCH_AUTOSCALE_LIMIT: u8 = 0x26;
-const GET_MAX_AMPLITUDE_CHANGE: u8 = 0x27;
-const SET_MAX_AMPLITUDE_CHANGE: u8 = 0x28;
-const GET_PWM_FREQUENCY: u8 = 0x2D;
-const SET_PWM_FREQUENCY: u8 = 0x2E;
-const GET_PWM_GRADIENT: u8 = 0x2F;
-const SET_PWM_GRADIENT: u8 = 0x30;
-const GET_PWM_OFFSET: u8 = 0x31;
-const SET_PWM_OFFSET: u8 = 0x32;
-const GET_MICROSTEP_TIME: u8 = 0x3E;
 const GET_MOTOR_LOAD: u8 = 0x3F;
-const GET_MICROSTEP_POSITION: u8 = 0x40;
-const GET_MICROSTEP_CURRENT: u8 = 0x41;
-const GET_CURRENT_SCALE: u8 = 0x44;
-const GET_TEMPERATURE: u8 = 0x45;
-const GET_OVERTEMPERATURE: u8 = 0x49;
 const GET_FLOW_HISTORY: u8 = 0x4A;
 const GET_VALVE: u8 = 0x4B;
 const SET_VALVE: u8 = 0x4C;
@@ -128,92 +100,8 @@ enum Request {
     #[deku(id = "SET_STOP_MODE")]
     SetStopMode(#[deku(bits = 8)] StopMode),
 
-    #[deku(id = "GET_MICROSTEPS")]
-    GetMicrosteps,
-
-    #[deku(id = "SET_MICROSTEPS")]
-    SetMicrosteps(u16),
-
-    #[deku(id = "GET_BLANK_TIME")]
-    GetBlankTime,
-
-    #[deku(id = "SET_BLANK_TIME")]
-    SetBlankTime(#[deku(bits = 8)] BlankTime),
-
-    #[deku(id = "GET_HYSTERESIS_END")]
-    GetHysteresisEnd,
-
-    #[deku(id = "SET_HYSTERESIS_END")]
-    SetHysteresisEnd(i8),
-
-    #[deku(id = "GET_HYSTERESIS_START")]
-    GetHysteresisStart,
-
-    #[deku(id = "SET_HYSTERESIS_START")]
-    SetHysteresisStart(u8),
-
-    #[deku(id = "GET_DECAY_TIME")]
-    GetDecayTime,
-
-    #[deku(id = "SET_DECAY_TIME")]
-    SetDecayTime(u8),
-
-    #[deku(id = "GET_PWM_MAX_RPM")]
-    GetPwmMaxRpm,
-
-    #[deku(id = "SET_PWM_MAX_RPM")]
-    SetPwmMaxRpm(f64),
-
-    #[deku(id = "GET_DRIVER_SWITCH_AUTOSCALE_LIMIT")]
-    GetDriverSwitchAutoscaleLimit,
-
-    #[deku(id = "SET_DRIVER_SWITCH_AUTOSCALE_LIMIT")]
-    SetDriverSwitchAutoscaleLimit(u8),
-
-    #[deku(id = "GET_MAX_AMPLITUDE_CHANGE")]
-    GetMaxAmplitudeChange,
-
-    #[deku(id = "SET_MAX_AMPLITUDE_CHANGE")]
-    SetMaxAmplitudeChange(u8),
-
-    #[deku(id = "GET_PWM_FREQUENCY")]
-    GetPwmFrequency,
-
-    #[deku(id = "SET_PWM_FREQUENCY")]
-    SetPwmFrequency(#[deku(bits = 8)] PwmFrequency),
-
-    #[deku(id = "GET_PWM_GRADIENT")]
-    GetPwmGradient,
-
-    #[deku(id = "SET_PWM_GRADIENT")]
-    SetPwmGradient(u8),
-
-    #[deku(id = "GET_PWM_OFFSET")]
-    GetPwmOffset,
-
-    #[deku(id = "SET_PWM_OFFSET")]
-    SetPwmOffset(u8),
-
-    #[deku(id = "GET_MICROSTEP_TIME")]
-    GetMicrostepTime,
-
     #[deku(id = "GET_MOTOR_LOAD")]
     GetMotorLoad,
-
-    #[deku(id = "GET_MICROSTEP_POSITION")]
-    GetMicrostepPosition,
-
-    #[deku(id = "GET_MICROSTEP_CURRENT")]
-    GetMicrostepCurrent,
-
-    #[deku(id = "GET_CURRENT_SCALE")]
-    GetCurrentScale,
-
-    #[deku(id = "GET_TEMPERATURE")]
-    GetTemperature,
-
-    #[deku(id = "GET_OVERTEMPERATURE")]
-    GetOverTemperature,
 
     #[deku(id = "GET_FLOW_HISTORY")]
     GetFlowHistory,
@@ -267,92 +155,8 @@ enum Response {
     #[deku(id = "SET_STOP_MODE")]
     SetStopMode,
 
-    #[deku(id = "GET_MICROSTEPS")]
-    GetMicrosteps(u16),
-
-    #[deku(id = "SET_MICROSTEPS")]
-    SetMicrosteps,
-
-    #[deku(id = "GET_BLANK_TIME")]
-    GetBlankTime(#[deku(bits = 8)] BlankTime),
-
-    #[deku(id = "SET_BLANK_TIME")]
-    SetBlankTime,
-
-    #[deku(id = "GET_HYSTERESIS_END")]
-    GetHysteresisEnd(i8),
-
-    #[deku(id = "SET_HYSTERESIS_END")]
-    SetHysteresisEnd,
-
-    #[deku(id = "GET_HYSTERESIS_START")]
-    GetHysteresisStart(u8),
-
-    #[deku(id = "SET_HYSTERESIS_START")]
-    SetHysteresisStart,
-
-    #[deku(id = "GET_DECAY_TIME")]
-    GetDecayTime(u8),
-
-    #[deku(id = "SET_DECAY_TIME")]
-    SetDecayTime,
-
-    #[deku(id = "GET_PWM_MAX_RPM")]
-    GetPwmMaxRpm(f64),
-
-    #[deku(id = "SET_PWM_MAX_RPM")]
-    SetPwmMaxRpm,
-
-    #[deku(id = "GET_DRIVER_SWITCH_AUTOSCALE_LIMIT")]
-    GetDriverSwitchAutoscaleLimit(u8),
-
-    #[deku(id = "SET_DRIVER_SWITCH_AUTOSCALE_LIMIT")]
-    SetDriverSwitchAutoscaleLimit,
-
-    #[deku(id = "GET_MAX_AMPLITUDE_CHANGE")]
-    GetMaxAmplitudeChange(u8),
-
-    #[deku(id = "SET_MAX_AMPLITUDE_CHANGE")]
-    SetMaxAmplitudeChange,
-
-    #[deku(id = "GET_PWM_FREQUENCY")]
-    GetPwmFrequency(#[deku(bits = 8)] PwmFrequency),
-
-    #[deku(id = "SET_PWM_FREQUENCY")]
-    SetPwmFrequency,
-
-    #[deku(id = "GET_PWM_GRADIENT")]
-    GetPwmGradient(u8),
-
-    #[deku(id = "SET_PWM_GRADIENT")]
-    SetPwmGradient,
-
-    #[deku(id = "GET_PWM_OFFSET")]
-    GetPwmOffset(u8),
-
-    #[deku(id = "SET_PWM_OFFSET")]
-    SetPwmOffset,
-
-    #[deku(id = "GET_MICROSTEP_TIME")]
-    GetMicrostepTime(u32),
-
     #[deku(id = "GET_MOTOR_LOAD")]
     GetMotorLoad(u16),
-
-    #[deku(id = "GET_MICROSTEP_POSITION")]
-    GetMicrostepPosition(u16),
-
-    #[deku(id = "GET_MICROSTEP_CURRENT")]
-    GetMicrostepCurrent(i16, i16),
-
-    #[deku(id = "GET_CURRENT_SCALE")]
-    GetCurrentScale(u8),
-
-    #[deku(id = "GET_TEMPERATURE")]
-    GetTemperature(#[deku(bits = 8)] TemperatureThreshold),
-
-    #[deku(id = "GET_OVERTEMPERATURE")]
-    GetOverTemperature(#[deku(bits = 8)] OverTemperatureStatus),
 
     #[deku(id = "GET_FLOW_HISTORY")]
     GetFlowHistory {
@@ -541,75 +345,7 @@ async fn handle_request<'a>(
             tmc.set_stop_mode(mode)?;
             Response::SetStopMode
         }
-        Request::GetMicrosteps => Response::GetMicrosteps(tmc.microsteps()),
-        Request::SetMicrosteps(n) => {
-            tmc.set_microsteps(n)?;
-            Response::SetMicrosteps
-        }
-        Request::GetBlankTime => Response::GetBlankTime(tmc.blank_time()?),
-        Request::SetBlankTime(time) => {
-            tmc.set_blank_time(time)?;
-            Response::SetBlankTime
-        }
-        Request::GetHysteresisEnd => Response::GetHysteresisEnd(tmc.hysteresis_end()?),
-        Request::SetHysteresisEnd(end) => {
-            tmc.set_hysteresis_end(end)?;
-            Response::SetHysteresisEnd
-        }
-        Request::GetHysteresisStart => Response::GetHysteresisStart(tmc.hysteresis_start()?),
-        Request::SetHysteresisStart(start) => {
-            tmc.set_hysteresis_start(start)?;
-            Response::SetHysteresisStart
-        }
-        Request::GetDecayTime => Response::GetDecayTime(tmc.decay_time()?),
-        Request::SetDecayTime(time) => {
-            tmc.set_decay_time(time)?;
-            Response::SetDecayTime
-        }
-        Request::GetPwmMaxRpm => Response::GetPwmMaxRpm(tmc.pwm_max_rpm()?),
-        Request::SetPwmMaxRpm(rpm) => {
-            tmc.set_pwm_max_rpm(rpm)?;
-            Response::SetPwmMaxRpm
-        }
-        Request::GetDriverSwitchAutoscaleLimit => {
-            Response::GetDriverSwitchAutoscaleLimit(tmc.driver_switch_autoscale_limit()?)
-        }
-        Request::SetDriverSwitchAutoscaleLimit(limit) => {
-            tmc.set_driver_switch_autoscale_limit(limit)?;
-            Response::SetDriverSwitchAutoscaleLimit
-        }
-        Request::GetMaxAmplitudeChange => {
-            Response::GetMaxAmplitudeChange(tmc.max_amplitude_change()?)
-        }
-        Request::SetMaxAmplitudeChange(change) => {
-            tmc.set_max_amplitude_change(change)?;
-            Response::SetMaxAmplitudeChange
-        }
-        Request::GetPwmFrequency => Response::GetPwmFrequency(tmc.pwm_frequency()?),
-        Request::SetPwmFrequency(frequency) => {
-            tmc.set_pwm_frequency(frequency)?;
-            Response::SetPwmFrequency
-        }
-        Request::GetPwmGradient => Response::GetPwmGradient(tmc.pwm_gradient()?),
-        Request::SetPwmGradient(gradient) => {
-            tmc.set_pwm_gradient(gradient)?;
-            Response::SetPwmGradient
-        }
-        Request::GetPwmOffset => Response::GetPwmOffset(tmc.pwm_offset()?),
-        Request::SetPwmOffset(offset) => {
-            tmc.set_pwm_offset(offset)?;
-            Response::SetPwmOffset
-        }
-        Request::GetMicrostepTime => Response::GetMicrostepTime(tmc.microstep_time()?),
         Request::GetMotorLoad => Response::GetMotorLoad(tmc.motor_load()?),
-        Request::GetMicrostepPosition => Response::GetMicrostepPosition(tmc.microstep_position()?),
-        Request::GetMicrostepCurrent => {
-            let (a, b) = tmc.microstep_current()?;
-            Response::GetMicrostepCurrent(a, b)
-        }
-        Request::GetCurrentScale => Response::GetCurrentScale(tmc.current_scale()?),
-        Request::GetTemperature => Response::GetTemperature(tmc.temperature()?),
-        Request::GetOverTemperature => Response::GetOverTemperature(tmc.over_temperature()?),
         Request::GetFlowHistory => {
             let samples: Vec<f64> = FLOW_HISTORY.lock(|history| {
                 let mut samples = Vec::with_capacity(history.len());
