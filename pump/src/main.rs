@@ -419,23 +419,36 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
 async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>, valve: ValveHandle<'static>) -> ! {
     info!("Flow sensor initialized.");
     sensor.start(LiquidType::Water).await.unwrap();
+    let century = Duration::from_secs(100 * 365 * 24 * 3600);
     let mut flush_end = Instant::now();
-    let mut seen_liquid = false;
+    // Set air end to be very high so we don't prematurely stop motors before we've seen liquid.
+    let mut air_end = Instant::now() + century;
     loop {
         let info = sensor.read().await.unwrap();
         let flush_time = FLUSH_TIME.get_cloned();
         if !info.air_in_line {
-            seen_liquid = true;
-        } else if seen_liquid && flush_time > 0.0 {
+            // Reset the air timeout when we see liquid.
+            air_end = Instant::now() + Duration::from_secs(5 * 60);
+        } else if flush_time > 0.0 {
+            let flush_time = FLUSH_TIME.get_cloned();
             FLUSH_MODE.set(true);
             valve.lock(|v| v.set_low());
-            flush_end = Instant::now() + Duration::from_millis((flush_time * 1000.0) as u64);
+            flush_end = Instant::now() + Duration::from_millis(1000 * flush_time as u64);
         }
 
+        // Stop flushing if enough time has passed.
         if Instant::now() > flush_end {
             FLUSH_MODE.set(false);
             valve.lock(|v| v.set_high());
         }
+
+        // Stop running the motors if we've only seen air for the last 5 minutes.
+        if Instant::now() > air_end {
+            air_end = Instant::now() + century;
+            FLUSH_MODE.set(false);
+            RPM.set(0.0);
+        }
+
         FLOW_INFO.set(info);
         FLOW_HISTORY.lock(|history| {
             if history.is_full() {
