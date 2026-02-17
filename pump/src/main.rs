@@ -445,8 +445,7 @@ async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>, valve: ValveHand
         // Stop running the motors if we've only seen air for the last 5 minutes.
         if Instant::now() > air_end {
             air_end = Instant::now() + century;
-            FLUSH_MODE.set(false);
-            RPM.set(0.0);
+            FLUSH_RPM.set(0.0);
         }
 
         FLOW_INFO.set(info);
@@ -456,7 +455,7 @@ async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>, valve: ValveHand
             }
             history.push_back(info.ul_per_min).unwrap();
         });
-        Timer::after_millis(1).await;
+        Timer::after_millis(10).await;
     }
 }
 
