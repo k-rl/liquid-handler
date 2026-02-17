@@ -11,9 +11,7 @@ mod tmc2209;
 
 use crate::{
     flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType},
-    tmc2209::{
-        BlankTime, OverTemperatureStatus, PwmFrequency, StopMode, TemperatureThreshold, Tmc2209,
-    },
+    tmc2209::{StopMode, Tmc2209},
 };
 use alloc::{sync::Arc, vec::Vec};
 use common::{mutex::Mutex, usb::PacketStream};
@@ -21,7 +19,7 @@ use core::result;
 use defmt::{debug, info, Debug2Format, Format};
 use deku::prelude::*;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_time::{Duration, Instant, Timer};
 use esp_hal::{
     self,
     clock::CpuClock,
@@ -58,8 +56,11 @@ const GET_MOTOR_LOAD: u8 = 0x3F;
 const GET_FLOW_HISTORY: u8 = 0x4A;
 const GET_VALVE: u8 = 0x4B;
 const SET_VALVE: u8 = 0x4C;
-const GET_AIR_STOP: u8 = 0x4D;
-const SET_AIR_STOP: u8 = 0x4E;
+const GET_FLUSH_TIME: u8 = 0x4D;
+const SET_FLUSH_TIME: u8 = 0x4E;
+const GET_FLUSH_RPM: u8 = 0x4F;
+const SET_FLUSH_RPM: u8 = 0x50;
+const GET_FLUSHING: u8 = 0x51;
 const FAIL: u8 = 0xFF;
 
 const FLOW_HISTORY_LEN: usize = 1000;
@@ -112,11 +113,20 @@ enum Request {
     #[deku(id = "SET_VALVE")]
     SetValve(bool),
 
-    #[deku(id = "GET_AIR_STOP")]
-    GetAirStop,
+    #[deku(id = "GET_FLUSH_TIME")]
+    GetFlushTime,
 
-    #[deku(id = "SET_AIR_STOP")]
-    SetAirStop(bool),
+    #[deku(id = "SET_FLUSH_TIME")]
+    SetFlushTime(f64),
+
+    #[deku(id = "GET_FLUSH_RPM")]
+    GetFlushRpm,
+
+    #[deku(id = "SET_FLUSH_RPM")]
+    SetFlushRpm(f64),
+
+    #[deku(id = "GET_FLUSHING")]
+    GetFlushing,
 }
 
 #[derive(Debug, Clone, DekuRead, DekuWrite, Format)]
@@ -171,11 +181,20 @@ enum Response {
     #[deku(id = "SET_VALVE")]
     SetValve,
 
-    #[deku(id = "GET_AIR_STOP")]
-    GetAirStop(bool),
+    #[deku(id = "GET_FLUSH_TIME")]
+    GetFlushTime(f64),
 
-    #[deku(id = "SET_AIR_STOP")]
-    SetAirStop,
+    #[deku(id = "SET_FLUSH_TIME")]
+    SetFlushTime,
+
+    #[deku(id = "GET_FLUSH_RPM")]
+    GetFlushRpm(f64),
+
+    #[deku(id = "SET_FLUSH_RPM")]
+    SetFlushRpm,
+
+    #[deku(id = "GET_FLUSHING")]
+    GetFlushing(bool),
 
     #[deku(id = "FAIL")]
     Fail,
@@ -219,9 +238,12 @@ impl Format for HandleRequestError {
 esp_bootloader_esp_idf::esp_app_desc!();
 
 type TmcHandle<'a> = Arc<Tmc2209<'a>>;
+type ValveHandle<'a> = Arc<Mutex<Output<'a>>>;
 
 static RPM: Mutex<f64> = Mutex::new(0.0);
-static AIR_STOP: Mutex<bool> = Mutex::new(false);
+static FLUSH_TIME: Mutex<f64> = Mutex::new(0.0);
+static FLUSH_RPM: Mutex<f64> = Mutex::new(0.0);
+static FLUSH_MODE: Mutex<bool> = Mutex::new(false);
 static UL_PER_MIN: Mutex<f64> = Mutex::new(f64::NAN);
 static FLOW_HISTORY: Mutex<Deque<f64, FLOW_HISTORY_LEN>> = Mutex::new(Deque::new());
 static FLOW_INFO: Mutex<FlowSensorInfo> = Mutex::new(FlowSensorInfo {
@@ -274,16 +296,22 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     let sensor = FlowSensor::new(peripherals.I2C0, peripherals.GPIO2, peripherals.GPIO1);
-    spawner.spawn(run_flow_rate_monitor(sensor)).unwrap();
+    let valve = Arc::new(Mutex::new(Output::new(
+        peripherals.GPIO4,
+        Low,
+        OutputConfig::default(),
+    )));
+    spawner
+        .spawn(run_flow_rate_monitor(sensor, Arc::clone(&valve)))
+        .unwrap();
     spawner.spawn(run_reset_monitor(Arc::clone(&tmc))).unwrap();
-    let valve = Output::new(peripherals.GPIO4, Low, OutputConfig::default());
     run_coordinator(peripherals.USB_DEVICE, tmc, valve).await;
 }
 
 async fn run_coordinator<'a>(
     device: USB_DEVICE<'a>,
     tmc: TmcHandle<'a>,
-    mut valve: Output<'a>,
+    valve: ValveHandle<'a>,
 ) -> ! {
     let mut stream = PacketStream::new(device, Duration::from_secs(1));
     loop {
@@ -294,7 +322,7 @@ async fn run_coordinator<'a>(
 
         debug!("Received packet: {=[?]}", &packet[..]);
         let response = match Request::from_bytes((&packet, 0)) {
-            Ok((_, packet)) => match handle_request(packet, &tmc, &mut valve).await {
+            Ok((_, packet)) => match handle_request(packet, &tmc, &valve).await {
                 Ok(response) => response,
                 Err(err) => {
                     info!("Handle request error: {}", err);
@@ -316,7 +344,7 @@ async fn run_coordinator<'a>(
 async fn handle_request<'a>(
     packet: Request,
     tmc: &TmcHandle<'a>,
-    valve: &mut Output<'a>,
+    valve: &ValveHandle<'a>,
 ) -> Result<Response> {
     let response = match packet {
         Request::Init => Response::Init(0),
@@ -359,20 +387,22 @@ async fn handle_request<'a>(
                 samples,
             }
         }
-        Request::GetValve => Response::GetValve(valve.is_set_high()),
+        Request::GetValve => Response::GetValve(valve.lock(|v| v.is_set_high())),
         Request::SetValve(open) => {
-            if open {
-                valve.set_high();
-            } else {
-                valve.set_low();
-            }
+            valve.lock(|v| if open { v.set_high() } else { v.set_low() });
             Response::SetValve
         }
-        Request::GetAirStop => Response::GetAirStop(AIR_STOP.get_cloned()),
-        Request::SetAirStop(enabled) => {
-            AIR_STOP.set(enabled);
-            Response::SetAirStop
+        Request::GetFlushTime => Response::GetFlushTime(FLUSH_TIME.get_cloned()),
+        Request::SetFlushTime(seconds) => {
+            FLUSH_TIME.set(seconds);
+            Response::SetFlushTime
         }
+        Request::GetFlushRpm => Response::GetFlushRpm(FLUSH_RPM.get_cloned()),
+        Request::SetFlushRpm(rpm) => {
+            FLUSH_RPM.set(rpm);
+            Response::SetFlushRpm
+        }
+        Request::GetFlushing => Response::GetFlushing(FLUSH_MODE.get_cloned()),
     };
     Ok(response)
 }
@@ -386,28 +416,34 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
 }
 
 #[embassy_executor::task]
-async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>) -> ! {
+async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>, valve: ValveHandle<'static>) -> ! {
     info!("Flow sensor initialized.");
     sensor.start(LiquidType::Water).await.unwrap();
+    let mut flush_end = Instant::now();
+    let mut seen_liquid = false;
     loop {
-        match sensor.read().await {
-            Ok(info) => {
-                if AIR_STOP.get_cloned() && info.air_in_line {
-                    RPM.set(0.0);
-                }
-                FLOW_INFO.set(info);
-                FLOW_HISTORY.lock(|history| {
-                    if history.is_full() {
-                        history.pop_front();
-                    }
-                    history.push_back(info.ul_per_min).unwrap();
-                });
-            }
-            Err(err) => {
-                info!("Flow sensor error: {:?}", Debug2Format(&err));
-            }
+        let info = sensor.read().await.unwrap();
+        let flush_time = FLUSH_TIME.get_cloned();
+        if !info.air_in_line {
+            seen_liquid = true;
+        } else if seen_liquid {
+            FLUSH_MODE.set(true);
+            valve.lock(|v| v.set_low());
+            flush_end = Instant::now() + Duration::from_millis((flush_time * 1000.0) as u64);
         }
-        Timer::after_millis(50).await;
+
+        if Instant::now() > flush_end {
+            FLUSH_MODE.set(false);
+            valve.lock(|v| v.set_high());
+        }
+        FLOW_INFO.set(info);
+        FLOW_HISTORY.lock(|history| {
+            if history.is_full() {
+                history.pop_front();
+            }
+            history.push_back(info.ul_per_min).unwrap();
+        });
+        Timer::after_millis(1).await;
     }
 }
 
@@ -440,7 +476,12 @@ fn run_tmc(
     let a = 1.0;
     let mut elapsed_us = 0;
     loop {
-        let target_v = RPM.get_cloned() / 60.0;
+        let rpm = if FLUSH_MODE.get_cloned() {
+            FLUSH_RPM.get_cloned()
+        } else {
+            RPM.get_cloned()
+        };
+        let target_v = rpm / 60.0;
         if v < target_v - 0.01 * a {
             v += a * 0.01
         } else if v > target_v + 0.01 * a {
