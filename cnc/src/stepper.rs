@@ -150,6 +150,7 @@ impl<'a> Stepper<'a> {
         self.backlash = (total + 2) / 5;
 
         self.pos = 0;
+        self.target_pos = 0;
         self.v = 0.0;
         self.elapsed_us = 0;
         self.last_time = Instant::now();
