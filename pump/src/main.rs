@@ -426,7 +426,7 @@ async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>, valve: ValveHand
         let flush_time = FLUSH_TIME.get_cloned();
         if !info.air_in_line {
             seen_liquid = true;
-        } else if seen_liquid {
+        } else if seen_liquid && flush_time > 0.0 {
             FLUSH_MODE.set(true);
             valve.lock(|v| v.set_low());
             flush_end = Instant::now() + Duration::from_millis((flush_time * 1000.0) as u64);
