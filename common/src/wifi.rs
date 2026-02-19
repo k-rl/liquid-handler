@@ -36,14 +36,16 @@ trait EspNowExt {
 
 impl EspNowExt for EspNow<'_> {
     fn add_mac(&mut self, mac: [u8; 6]) {
-        self.add_peer(PeerInfo {
-            interface: EspNowWifiInterface::Sta,
-            peer_address: mac,
-            lmk: None,
-            channel: None,
-            encrypt: false,
-        })
-        .unwrap();
+        if !self.peer_exists(&mac) {
+            self.add_peer(PeerInfo {
+                interface: EspNowWifiInterface::Sta,
+                peer_address: mac,
+                lmk: None,
+                channel: None,
+                encrypt: false,
+            })
+            .unwrap();
+        }
     }
 
     async fn recv(&mut self) -> Result<([u8; 6], Frame)> {
