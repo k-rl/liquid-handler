@@ -69,7 +69,7 @@ impl<'a> PacketStream<'a> {
     }
 
     pub async fn read(&mut self) -> Result<Vec<u8>> {
-        let mut size = self.read_byte().await;
+        let mut size = self.read_byte().await?;
         let mut vec = Vec::new();
         if size == 0 {
             return Ok(vec);
@@ -87,16 +87,13 @@ impl<'a> PacketStream<'a> {
 
             // If we read any zero byte then we're out of frame and should reset.
             if vec[l..].contains(&0) {
-                let mut byte = 1;
                 // Clear out the buffer until the next restart point.
-                while byte != 0 {
-                    byte = self.read_byte().await;
-                }
+                while self.read_byte().await.unwrap_or(0) != 0 {}
                 break Err(Error::ZeroByte);
             }
 
             let prev_size = size;
-            size = self.read_byte().await;
+            size = self.read_byte().await?;
             if size == 0 {
                 break Ok(vec);
             } else if prev_size != 255 {
@@ -105,12 +102,15 @@ impl<'a> PacketStream<'a> {
         }
     }
 
-    async fn read_byte(&mut self) -> u8 {
+    async fn read_byte(&mut self) -> Result<u8> {
         let mut byte = 0u8;
         // Unwrap because we have an infallible error.
-        Read::read_exact(&mut self.usb, slice::from_mut(&mut byte))
-            .await
-            .unwrap();
-        byte
+        embassy_time::with_timeout(
+            self.timeout,
+            Read::read_exact(&mut self.usb, slice::from_mut(&mut byte)),
+        )
+        .await?
+        .unwrap();
+        Ok(byte)
     }
 }
