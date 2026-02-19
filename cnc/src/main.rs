@@ -8,17 +8,20 @@
 
 mod stepper;
 
-use alloc::{boxed::Box, sync::Arc};
 use crate::stepper::Stepper;
-use common::{mutex::Mutex, usb::PacketStream, wifi::{Role, Socket}};
+use alloc::{boxed::Box, sync::Arc};
+use common::{
+    mutex::Mutex,
+    wifi::{Role, Socket},
+};
 use deku::prelude::*;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use esp_hal::{
     self,
     clock::CpuClock,
     interrupt::software::SoftwareInterruptControl,
-    peripherals::{TIMG0, USB_DEVICE, WIFI},
+    peripherals::{TIMG0, WIFI},
     system::Stack,
     time,
     timer::{
@@ -33,15 +36,16 @@ extern crate alloc;
 type Motor = Arc<Mutex<Stepper<'static>>>;
 
 // Request/response codes.
-const INIT: u8 = 0x00;
-const HOME: u8 = 0x01;
-const IS_HOMING: u8 = 0x02;
-const SET_POS: u8 = 0x03;
-const GET_POS: u8 = 0x04;
-const SET_SPEED: u8 = 0x05;
-const GET_SPEED: u8 = 0x06;
-const SET_ACCEL: u8 = 0x07;
-const GET_ACCEL: u8 = 0x08;
+const INIT: u8 = 0x60;
+const HOME: u8 = 0x61;
+const IS_HOMING: u8 = 0x62;
+const SET_POS: u8 = 0x63;
+const GET_POS: u8 = 0x64;
+const SET_SPEED: u8 = 0x65;
+const GET_SPEED: u8 = 0x66;
+const SET_ACCEL: u8 = 0x67;
+const GET_ACCEL: u8 = 0x68;
+const HEARTBEAT: u8 = 0xFE;
 const FAIL: u8 = 0xFF;
 
 #[derive(Debug, Clone, Copy, DekuRead, DekuWrite)]
@@ -121,8 +125,6 @@ async fn main(spawner: Spawner) -> ! {
     let timers = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timers.timer0);
 
-    spawner.spawn(run_heartbeat(peripherals.WIFI)).unwrap();
-
     Timer::after_secs(2).await;
 
     let mut watchdog = timers.wdt;
@@ -136,18 +138,24 @@ async fn main(spawner: Spawner) -> ! {
     // Z: D8=GPIO17, D7=GPIO10, D6=GPIO9, D5=GPIO8
     // Limit switch pins: X=D10(GPIO21), Y=D11(GPIO38), Z=D9(GPIO18)
     let x_motor: Motor = Arc::new(Mutex::new(Stepper::new(
-        peripherals.GPIO7, peripherals.GPIO6,
-        peripherals.GPIO5, peripherals.GPIO2,
+        peripherals.GPIO7,
+        peripherals.GPIO6,
+        peripherals.GPIO5,
+        peripherals.GPIO2,
         peripherals.GPIO21,
     )));
     let y_motor: Motor = Arc::new(Mutex::new(Stepper::new(
-        peripherals.GPIO3, peripherals.GPIO4,
-        peripherals.GPIO11, peripherals.GPIO12,
+        peripherals.GPIO3,
+        peripherals.GPIO4,
+        peripherals.GPIO11,
+        peripherals.GPIO12,
         peripherals.GPIO38,
     )));
     let z_motor: Motor = Arc::new(Mutex::new(Stepper::new(
-        peripherals.GPIO17, peripherals.GPIO10,
-        peripherals.GPIO9, peripherals.GPIO8,
+        peripherals.GPIO17,
+        peripherals.GPIO10,
+        peripherals.GPIO9,
+        peripherals.GPIO8,
         peripherals.GPIO18,
     )));
 
@@ -166,15 +174,34 @@ async fn main(spawner: Spawner) -> ! {
         move || run_steppers(x_clone, y_clone, z_clone, timers.timer1),
     );
 
-    run_coordinator(peripherals.USB_DEVICE, x_motor, y_motor, z_motor).await;
+    run_coordinator(peripherals.WIFI, x_motor, y_motor, z_motor).await;
 }
 
-async fn run_coordinator<'a>(device: USB_DEVICE<'a>, x: Motor, y: Motor, z: Motor) -> ! {
-    let mut stream = PacketStream::new(device, Duration::from_secs(1));
+async fn run_coordinator<'a>(wifi: WIFI<'a>, x: Motor, y: Motor, z: Motor) -> ! {
+    // Init the wifi socket.
+    let controller = Box::leak(Box::new(esp_radio::init().unwrap()));
+    let (mut wifi_controller, interfaces) =
+        esp_radio::wifi::new(controller, wifi, Default::default()).unwrap();
+    wifi_controller
+        .set_mode(esp_radio::wifi::WifiMode::Sta)
+        .unwrap();
+    wifi_controller.start().unwrap();
+    let mut socket = Socket::new(interfaces.esp_now, Role::Server).await;
+
     loop {
-        let Ok(packet) = stream.read().await else {
-            continue;
+        let packet = match socket.read().await {
+            Ok(packet) => packet,
+            Err(_) => {
+                // Listen for a new connection if we failed to get a response.
+                socket = Socket::new(socket.into_inner(), Role::Server).await;
+                continue;
+            }
         };
+
+        if packet == &[HEARTBEAT] {
+            // We don't need to send an app-level response on heartbeat.
+            continue;
+        }
 
         let response = match Request::from_bytes((&packet, 0)) {
             Ok((_, packet)) => handle_request(packet, &x, &y, &z),
@@ -182,7 +209,9 @@ async fn run_coordinator<'a>(device: USB_DEVICE<'a>, x: Motor, y: Motor, z: Moto
         };
 
         let response_bytes = response.to_bytes().unwrap();
-        stream.write(&response_bytes).await;
+        if socket.write(&response_bytes).await.is_err() {
+            socket = Socket::new(socket.into_inner(), Role::Server).await;
+        }
     }
 }
 
@@ -211,21 +240,15 @@ fn handle_request(packet: Request, x: &Motor, y: &Motor, z: &Motor) -> Response 
             z.lock(|m| m.set_max_speed(s));
             Response::SetSpeed
         }
-        Request::GetSpeed => {
-            Response::GetSpeed(x.lock(|m| m.max_speed()))
-        }
+        Request::GetSpeed => Response::GetSpeed(x.lock(|m| m.max_speed())),
         Request::SetAccel(a) => {
             x.lock(|m| m.set_accel(a));
             y.lock(|m| m.set_accel(a));
             z.lock(|m| m.set_accel(a));
             Response::SetAccel
         }
-        Request::GetAccel => {
-            Response::GetAccel(x.lock(|m| m.accel()))
-        }
-        Request::IsHoming => {
-            Response::IsHoming(HOME_MODE.get_cloned())
-        }
+        Request::GetAccel => Response::GetAccel(x.lock(|m| m.accel())),
+        Request::IsHoming => Response::IsHoming(HOME_MODE.get_cloned()),
     }
 }
 
@@ -234,24 +257,6 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
     loop {
         watchdog.feed();
         Timer::after_millis(100).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn run_heartbeat(wifi: WIFI<'static>) -> ! {
-    let controller = Box::leak(Box::new(esp_radio::init().unwrap()));
-    let (mut wifi_controller, interfaces) =
-        esp_radio::wifi::new(controller, wifi, Default::default()).unwrap();
-    wifi_controller
-        .set_mode(esp_radio::wifi::WifiMode::Sta)
-        .unwrap();
-    wifi_controller.start().unwrap();
-
-    let mut socket = Socket::new(interfaces.esp_now, Role::Server).await;
-    loop {
-        if socket.read().await.is_err() {
-            socket = Socket::new(socket.into_inner(), Role::Server).await;
-        }
     }
 }
 
