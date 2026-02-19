@@ -57,7 +57,7 @@ impl EspNowExt for EspNow<'_> {
 
 // DATA frame overhead: id(1) + seq(4) = 5 bytes.
 const MAX_PAYLOAD: usize = 250 - 5;
-const TIMEOUT: Duration = Duration::from_millis(100);
+const TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -121,6 +121,11 @@ impl<'a> Socket<'a> {
         };
 
         Socket { esp_now, peer, seq }
+    }
+
+    /// Consumes the socket and returns the underlying `EspNow` for reuse.
+    pub fn into_inner(self) -> EspNow<'a> {
+        self.esp_now
     }
 
     pub async fn write(&mut self, data: &[u8]) -> Result<()> {

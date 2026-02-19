@@ -13,8 +13,8 @@ use crate::{
     flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType},
     tmc2209::{StopMode, Tmc2209},
 };
-use alloc::{sync::Arc, vec::Vec};
-use common::{mutex::Mutex, usb::PacketStream};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use common::{mutex::Mutex, usb::PacketStream, wifi::{Role, Socket}};
 use core::result;
 use defmt::{debug, info, Debug2Format, Format};
 use deku::prelude::*;
@@ -25,7 +25,7 @@ use esp_hal::{
     clock::CpuClock,
     gpio::{Level::Low, Output, OutputConfig},
     interrupt::software::SoftwareInterruptControl,
-    peripherals::{TIMG0, USB_DEVICE},
+    peripherals::{TIMG0, USB_DEVICE, WIFI},
     system::Stack,
     time,
     timer::{
@@ -305,6 +305,7 @@ async fn main(spawner: Spawner) -> ! {
         .spawn(run_flow_rate_monitor(sensor, Arc::clone(&valve)))
         .unwrap();
     spawner.spawn(run_reset_monitor(Arc::clone(&tmc))).unwrap();
+    spawner.spawn(run_heartbeat(peripherals.WIFI)).unwrap();
     run_coordinator(peripherals.USB_DEVICE, tmc, valve).await;
 }
 
@@ -470,6 +471,28 @@ async fn run_reset_monitor(tmc: TmcHandle<'static>) -> ! {
             tmc.set_stopped_rms_amps(stopped).unwrap();
         }
         Timer::after_secs(1).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn run_heartbeat(wifi: WIFI<'static>) -> ! {
+    let controller = Box::leak(Box::new(esp_radio::init().unwrap()));
+    let (mut wifi_controller, interfaces) =
+        esp_radio::wifi::new(controller, wifi, Default::default()).unwrap();
+    wifi_controller
+        .set_mode(esp_radio::wifi::WifiMode::Sta)
+        .unwrap();
+    wifi_controller.start().unwrap();
+
+    let mut socket = Socket::new(interfaces.esp_now, Role::Client).await;
+    info!("Connected to CNC.");
+    loop {
+        Timer::after_millis(100).await;
+        if socket.write(&[0]).await.is_err() {
+            info!("Heartbeat failed, reconnecting...");
+            socket = Socket::new(socket.into_inner(), Role::Client).await;
+            info!("Connected to CNC.");
+        }
     }
 }
 

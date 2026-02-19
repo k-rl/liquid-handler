@@ -8,9 +8,9 @@
 
 mod stepper;
 
-use alloc::sync::Arc;
+use alloc::{boxed::Box, sync::Arc};
 use crate::stepper::Stepper;
-use common::{mutex::Mutex, usb::PacketStream};
+use common::{mutex::Mutex, usb::PacketStream, wifi::{Role, Socket}};
 use deku::prelude::*;
 use embassy_executor::Spawner;
 use embassy_time::{Duration, Timer};
@@ -18,7 +18,7 @@ use esp_hal::{
     self,
     clock::CpuClock,
     interrupt::software::SoftwareInterruptControl,
-    peripherals::{TIMG0, USB_DEVICE},
+    peripherals::{TIMG0, USB_DEVICE, WIFI},
     system::Stack,
     time,
     timer::{
@@ -26,7 +26,6 @@ use esp_hal::{
         AnyTimer, PeriodicTimer,
     },
 };
-
 use panic_halt as _;
 
 extern crate alloc;
@@ -121,6 +120,8 @@ async fn main(spawner: Spawner) -> ! {
     esp_alloc::heap_allocator!(#[unsafe(link_section = ".dram2_uninit")] size: 73744);
     let timers = TimerGroup::new(peripherals.TIMG0);
     esp_rtos::start(timers.timer0);
+
+    spawner.spawn(run_heartbeat(peripherals.WIFI)).unwrap();
 
     Timer::after_secs(2).await;
 
@@ -233,6 +234,24 @@ async fn run_watchdog_monitor(mut watchdog: Wdt<TIMG0<'static>>) -> ! {
     loop {
         watchdog.feed();
         Timer::after_millis(100).await;
+    }
+}
+
+#[embassy_executor::task]
+async fn run_heartbeat(wifi: WIFI<'static>) -> ! {
+    let controller = Box::leak(Box::new(esp_radio::init().unwrap()));
+    let (mut wifi_controller, interfaces) =
+        esp_radio::wifi::new(controller, wifi, Default::default()).unwrap();
+    wifi_controller
+        .set_mode(esp_radio::wifi::WifiMode::Sta)
+        .unwrap();
+    wifi_controller.start().unwrap();
+
+    let mut socket = Socket::new(interfaces.esp_now, Role::Server).await;
+    loop {
+        if socket.read().await.is_err() {
+            socket = Socket::new(socket.into_inner(), Role::Server).await;
+        }
     }
 }
 
