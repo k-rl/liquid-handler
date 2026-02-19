@@ -1,8 +1,8 @@
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 use core::result;
 use deku::prelude::*;
 use embassy_time::{with_timeout, Duration};
-use esp_hal::rng::Rng;
+use esp_hal::{peripherals::WIFI, rng::Rng};
 use esp_radio::esp_now::{EspNow, EspNowWifiInterface, PeerInfo, BROADCAST_ADDRESS};
 use thiserror::Error;
 
@@ -83,25 +83,46 @@ pub struct Socket<'a> {
     esp_now: EspNow<'a>,
     peer: [u8; 6],
     seq: u32,
+    role: Role,
 }
 
 impl<'a> Socket<'a> {
-    /// Discovers a peer via ESP-NOW broadcast and establishes a connection
-    /// using a TCP-like three-way handshake (SYN → SYN_ACK → ACK).
-    pub async fn new(mut esp_now: EspNow<'a>, role: Role) -> Self {
-        esp_now.set_channel(1).unwrap();
+    /// Initializes WiFi and ESP-NOW, then establishes a connection with a peer.
+    pub async fn new(wifi: WIFI<'a>, role: Role) -> Self {
+        let controller = Box::leak(Box::new(esp_radio::init().unwrap()));
+        let (mut wifi_controller, interfaces) =
+            esp_radio::wifi::new(controller, wifi, Default::default()).unwrap();
+        wifi_controller
+            .set_mode(esp_radio::wifi::WifiMode::Sta)
+            .unwrap();
+        wifi_controller.start().unwrap();
+        let _ = Box::leak(Box::new(wifi_controller));
+
+        let mut socket = Socket {
+            esp_now: interfaces.esp_now,
+            peer: [0; 6],
+            seq: 0,
+            role,
+        };
+        socket.connect().await;
+        socket
+    }
+
+    pub async fn connect(&mut self) {
+        self.esp_now.set_channel(1).unwrap();
 
         let seq: u32 = Rng::new().random();
 
-        let (peer, seq) = match role {
+        let (peer, seq) = match self.role {
             Role::Client => {
                 // SYN: broadcast until we get a SYN_ACK back.
                 let peer = loop {
-                    let _ = esp_now
+                    let _ = self
+                        .esp_now
                         .send_async(&BROADCAST_ADDRESS, &Frame::Syn(seq).to_bytes().unwrap())
                         .await;
-                    if let Ok((mac, Frame::SynAck)) = esp_now.recv().await {
-                        esp_now.add_mac(mac);
+                    if let Ok((mac, Frame::SynAck)) = self.esp_now.recv().await {
+                        self.esp_now.add_mac(mac);
                         break mac;
                     }
                 };
@@ -110,24 +131,21 @@ impl<'a> Socket<'a> {
             Role::Server => {
                 // Wait for a SYN broadcast.
                 let (peer, seq) = loop {
-                    if let Ok((mac, Frame::Syn(seq))) = esp_now.recv().await {
-                        esp_now.add_mac(mac);
+                    if let Ok((mac, Frame::Syn(seq))) = self.esp_now.recv().await {
+                        self.esp_now.add_mac(mac);
                         break (mac, seq);
                     }
                 };
-                let _ = esp_now
+                let _ = self
+                    .esp_now
                     .send_async(&peer, &Frame::SynAck.to_bytes().unwrap())
                     .await;
                 (peer, seq)
             }
         };
 
-        Socket { esp_now, peer, seq }
-    }
-
-    /// Consumes the socket and returns the underlying `EspNow` for reuse.
-    pub fn into_inner(self) -> EspNow<'a> {
-        self.esp_now
+        self.peer = peer;
+        self.seq = seq;
     }
 
     pub async fn write(&mut self, data: &[u8]) -> Result<()> {

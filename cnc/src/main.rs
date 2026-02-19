@@ -9,7 +9,7 @@
 mod stepper;
 
 use crate::stepper::Stepper;
-use alloc::{boxed::Box, sync::Arc};
+use alloc::sync::Arc;
 use common::{
     mutex::Mutex,
     wifi::{Role, Socket},
@@ -178,22 +178,14 @@ async fn main(spawner: Spawner) -> ! {
 }
 
 async fn run_coordinator<'a>(wifi: WIFI<'a>, x: Motor, y: Motor, z: Motor) -> ! {
-    // Init the wifi socket.
-    let controller = Box::leak(Box::new(esp_radio::init().unwrap()));
-    let (mut wifi_controller, interfaces) =
-        esp_radio::wifi::new(controller, wifi, Default::default()).unwrap();
-    wifi_controller
-        .set_mode(esp_radio::wifi::WifiMode::Sta)
-        .unwrap();
-    wifi_controller.start().unwrap();
-    let mut socket = Socket::new(interfaces.esp_now, Role::Server).await;
+    let mut socket = Socket::new(wifi, Role::Server).await;
 
     loop {
         let packet = match socket.read().await {
             Ok(packet) => packet,
             Err(_) => {
                 // Listen for a new connection if we failed to get a response.
-                socket = Socket::new(socket.into_inner(), Role::Server).await;
+                socket.connect().await;
                 continue;
             }
         };
@@ -210,7 +202,7 @@ async fn run_coordinator<'a>(wifi: WIFI<'a>, x: Motor, y: Motor, z: Motor) -> ! 
 
         let response_bytes = response.to_bytes().unwrap();
         if socket.write(&response_bytes).await.is_err() {
-            socket = Socket::new(socket.into_inner(), Role::Server).await;
+            socket.connect().await;
         }
     }
 }
