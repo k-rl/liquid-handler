@@ -11,6 +11,7 @@ mod stepper;
 use crate::stepper::Stepper;
 use alloc::sync::Arc;
 use common::{
+    messages::{Request, Response, HEARTBEAT},
     mutex::Mutex,
     wifi::{Role, Socket},
 };
@@ -34,84 +35,6 @@ use panic_halt as _;
 extern crate alloc;
 
 type Motor = Arc<Mutex<Stepper<'static>>>;
-
-// Request/response codes.
-const INIT: u8 = 0x60;
-const HOME: u8 = 0x61;
-const IS_HOMING: u8 = 0x62;
-const SET_POS: u8 = 0x63;
-const GET_POS: u8 = 0x64;
-const SET_SPEED: u8 = 0x65;
-const GET_SPEED: u8 = 0x66;
-const SET_ACCEL: u8 = 0x67;
-const GET_ACCEL: u8 = 0x68;
-const HEARTBEAT: u8 = 0xFE;
-const FAIL: u8 = 0xFF;
-
-#[derive(Debug, Clone, Copy, DekuRead, DekuWrite)]
-#[deku(id_type = "u8", endian = "big")]
-enum Request {
-    #[deku(id = "INIT")]
-    Init,
-
-    #[deku(id = "HOME")]
-    Home,
-
-    #[deku(id = "IS_HOMING")]
-    IsHoming,
-
-    #[deku(id = "SET_POS")]
-    SetPos(i64, i64, i64),
-
-    #[deku(id = "GET_POS")]
-    GetPos,
-
-    #[deku(id = "SET_SPEED")]
-    SetSpeed(f64),
-
-    #[deku(id = "GET_SPEED")]
-    GetSpeed,
-
-    #[deku(id = "SET_ACCEL")]
-    SetAccel(f64),
-
-    #[deku(id = "GET_ACCEL")]
-    GetAccel,
-}
-
-#[derive(Debug, Clone, DekuRead, DekuWrite)]
-#[deku(id_type = "u8", endian = "big")]
-enum Response {
-    #[deku(id = "INIT")]
-    Init(u8),
-
-    #[deku(id = "HOME")]
-    Home,
-
-    #[deku(id = "IS_HOMING")]
-    IsHoming(bool),
-
-    #[deku(id = "SET_POS")]
-    SetPos,
-
-    #[deku(id = "GET_POS")]
-    GetPos(i64, i64, i64),
-
-    #[deku(id = "SET_SPEED")]
-    SetSpeed,
-
-    #[deku(id = "GET_SPEED")]
-    GetSpeed(f64),
-
-    #[deku(id = "SET_ACCEL")]
-    SetAccel,
-
-    #[deku(id = "GET_ACCEL")]
-    GetAccel(f64),
-
-    #[deku(id = "FAIL")]
-    Fail,
-}
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
@@ -207,13 +130,13 @@ async fn run_coordinator<'a>(wifi: WIFI<'a>, x: Motor, y: Motor, z: Motor) -> ! 
     }
 }
 
-fn handle_request(packet: Request, x: &Motor, y: &Motor, z: &Motor) -> Response {
-    match packet {
-        Request::Init => Response::Init(1),
+fn handle_request(request: Request, x: &Motor, y: &Motor, z: &Motor) -> Response {
+    match request {
         Request::Home => {
             HOME_MODE.set(true);
             Response::Home
         }
+        Request::IsHoming => Response::IsHoming(HOME_MODE.get_cloned()),
         Request::SetPos(px, py, pz) => {
             x.lock(|m| m.set_target_pos(px));
             y.lock(|m| m.set_target_pos(py));
@@ -240,7 +163,7 @@ fn handle_request(packet: Request, x: &Motor, y: &Motor, z: &Motor) -> Response 
             Response::SetAccel
         }
         Request::GetAccel => Response::GetAccel(x.lock(|m| m.accel())),
-        Request::IsHoming => Response::IsHoming(HOME_MODE.get_cloned()),
+        _ => Response::Fail,
     }
 }
 
