@@ -10,11 +10,16 @@ mod flow_sensor;
 mod tmc2209;
 
 use crate::{
-    flow_sensor::{FlowSensor, FlowSensorInfo, LiquidType},
-    tmc2209::{StopMode, Tmc2209},
+    flow_sensor::{FlowSensor, LiquidType},
+    tmc2209::Tmc2209,
 };
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use common::{mutex::Mutex, usb::PacketStream, wifi::{Role, Socket}};
+use alloc::{sync::Arc, vec::Vec};
+use common::{
+    messages::{Request, Response, HEARTBEAT},
+    mutex::Mutex,
+    usb::PacketStream,
+    wifi::{Role, Socket},
+};
 use core::result;
 use defmt::{debug, info, Debug2Format, Format};
 use deku::prelude::*;
@@ -34,189 +39,42 @@ use esp_hal::{
     },
 };
 use heapless::Deque;
-use thiserror::Error;
 
 use panic_rtt_target as _;
 
 extern crate alloc;
 
-// Request/response codes.
-const INIT: u8 = 0x00;
-const FLOW_SENSOR_INFO: u8 = 0x01;
-const SET_FLOW_UL_PER_MIN: u8 = 0x02;
-const SET_PUMP_RPM: u8 = 0x03;
-const GET_PUMP_RPM: u8 = 0x04;
-const GET_RMS_AMPS: u8 = 0x05;
-const SET_RMS_AMPS: u8 = 0x06;
-const GET_STOP_RMS_AMPS: u8 = 0x07;
-const SET_STOP_RMS_AMPS: u8 = 0x08;
-const GET_STOP_MODE: u8 = 0x09;
-const SET_STOP_MODE: u8 = 0x0A;
-const GET_MOTOR_LOAD: u8 = 0x3F;
-const GET_FLOW_HISTORY: u8 = 0x4A;
-const GET_VALVE: u8 = 0x4B;
-const SET_VALVE: u8 = 0x4C;
-const GET_FLUSH_TIME: u8 = 0x4D;
-const SET_FLUSH_TIME: u8 = 0x4E;
-const GET_FLUSH_RPM: u8 = 0x4F;
-const SET_FLUSH_RPM: u8 = 0x50;
-const GET_FLUSHING: u8 = 0x51;
-const FAIL: u8 = 0xFF;
-
 const FLOW_HISTORY_LEN: usize = 1000;
 
-#[derive(Debug, Clone, Copy, DekuRead, DekuWrite, Format)]
-#[deku(id_type = "u8", endian = "big")]
-enum Request {
-    #[deku(id = "INIT")]
-    Init,
-
-    #[deku(id = "FLOW_SENSOR_INFO")]
-    FlowSensorInfo,
-
-    #[deku(id = "SET_FLOW_UL_PER_MIN")]
-    SetFlowUlPerMin(f64),
-
-    #[deku(id = "SET_PUMP_RPM")]
-    SetPumpRpm(f64),
-
-    #[deku(id = "GET_PUMP_RPM")]
-    GetPumpRpm,
-
-    #[deku(id = "GET_RMS_AMPS")]
-    GetRmsAmps,
-
-    #[deku(id = "SET_RMS_AMPS")]
-    SetRmsAmps(f64),
-
-    #[deku(id = "GET_STOP_RMS_AMPS")]
-    GetStoppedRmsAmps,
-
-    #[deku(id = "SET_STOP_RMS_AMPS")]
-    SetStoppedRmsAmps(f64),
-
-    #[deku(id = "GET_STOP_MODE")]
-    GetStopMode,
-
-    #[deku(id = "SET_STOP_MODE")]
-    SetStopMode(#[deku(bits = 8)] StopMode),
-
-    #[deku(id = "GET_MOTOR_LOAD")]
-    GetMotorLoad,
-
-    #[deku(id = "GET_FLOW_HISTORY")]
-    GetFlowHistory,
-
-    #[deku(id = "GET_VALVE")]
-    GetValve,
-
-    #[deku(id = "SET_VALVE")]
-    SetValve(bool),
-
-    #[deku(id = "GET_FLUSH_TIME")]
-    GetFlushTime,
-
-    #[deku(id = "SET_FLUSH_TIME")]
-    SetFlushTime(f64),
-
-    #[deku(id = "GET_FLUSH_RPM")]
-    GetFlushRpm,
-
-    #[deku(id = "SET_FLUSH_RPM")]
-    SetFlushRpm(f64),
-
-    #[deku(id = "GET_FLUSHING")]
-    GetFlushing,
-}
-
-#[derive(Debug, Clone, DekuRead, DekuWrite, Format)]
-#[deku(id_type = "u8", endian = "big")]
-enum Response {
-    #[deku(id = "INIT")]
-    Init(u8),
-
-    #[deku(id = "FLOW_SENSOR_INFO")]
-    FlowSensorInfo(FlowSensorInfo),
-
-    #[deku(id = "SET_FLOW_UL_PER_MIN")]
-    SetFlowUlPerMin,
-
-    #[deku(id = "SET_PUMP_RPM")]
-    SetPumpRpm,
-
-    #[deku(id = "GET_PUMP_RPM")]
-    GetPumpRpm(f64),
-
-    #[deku(id = "GET_RMS_AMPS")]
-    GetRmsAmps(f64),
-
-    #[deku(id = "SET_RMS_AMPS")]
-    SetRmsAmps,
-
-    #[deku(id = "GET_STOP_RMS_AMPS")]
-    GetStoppedRmsAmps(f64),
-
-    #[deku(id = "SET_STOP_RMS_AMPS")]
-    SetStoppedRmsAmps,
-
-    #[deku(id = "GET_STOP_MODE")]
-    GetStopMode(#[deku(bits = 8)] StopMode),
-
-    #[deku(id = "SET_STOP_MODE")]
-    SetStopMode,
-
-    #[deku(id = "GET_MOTOR_LOAD")]
-    GetMotorLoad(u16),
-
-    #[deku(id = "GET_FLOW_HISTORY")]
-    GetFlowHistory {
-        len: u16,
-        #[deku(count = "len")]
-        samples: Vec<f64>,
-    },
-
-    #[deku(id = "GET_VALVE")]
-    GetValve(bool),
-
-    #[deku(id = "SET_VALVE")]
-    SetValve,
-
-    #[deku(id = "GET_FLUSH_TIME")]
-    GetFlushTime(f64),
-
-    #[deku(id = "SET_FLUSH_TIME")]
-    SetFlushTime,
-
-    #[deku(id = "GET_FLUSH_RPM")]
-    GetFlushRpm(f64),
-
-    #[deku(id = "SET_FLUSH_RPM")]
-    SetFlushRpm,
-
-    #[deku(id = "GET_FLUSHING")]
-    GetFlushing(bool),
-
-    #[deku(id = "FAIL")]
-    Fail,
-}
-
-#[derive(Error, Debug)]
+#[derive(Debug)]
 pub enum HandleRequestError {
-    #[error("TMC error: {error}")]
-    Tmc { error: tmc2209::Tmc2209Error },
-    #[error("Flow sensor error: {error:?}")]
-    FlowSensor { error: flow_sensor::FlowSensorError },
+    Tmc(tmc2209::Tmc2209Error),
+    FlowSensor(flow_sensor::FlowSensorError),
+    Wifi(common::wifi::Error),
+    Deku(deku::DekuError),
 }
 
 impl From<tmc2209::Tmc2209Error> for HandleRequestError {
     fn from(error: tmc2209::Tmc2209Error) -> Self {
-        HandleRequestError::Tmc { error }
+        HandleRequestError::Tmc(error)
     }
 }
 
 impl From<flow_sensor::FlowSensorError> for HandleRequestError {
     fn from(error: flow_sensor::FlowSensorError) -> Self {
-        HandleRequestError::FlowSensor { error }
+        HandleRequestError::FlowSensor(error)
+    }
+}
+
+impl From<common::wifi::Error> for HandleRequestError {
+    fn from(error: common::wifi::Error) -> Self {
+        HandleRequestError::Wifi(error)
+    }
+}
+
+impl From<deku::DekuError> for HandleRequestError {
+    fn from(error: deku::DekuError) -> Self {
+        HandleRequestError::Deku(error)
     }
 }
 
@@ -225,11 +83,17 @@ type Result<T> = result::Result<T, HandleRequestError>;
 impl Format for HandleRequestError {
     fn format(&self, f: defmt::Formatter) {
         match self {
-            HandleRequestError::Tmc { error } => {
+            HandleRequestError::Tmc(error) => {
                 defmt::write!(f, "TMC error: {}", error)
             }
-            HandleRequestError::FlowSensor { error } => {
+            HandleRequestError::FlowSensor(error) => {
                 defmt::write!(f, "Flow sensor error: {:?}", Debug2Format(error))
+            }
+            HandleRequestError::Wifi(error) => {
+                defmt::write!(f, "Wifi error: {:?}", Debug2Format(error))
+            }
+            HandleRequestError::Deku(error) => {
+                defmt::write!(f, "Deku error: {:?}", Debug2Format(error))
             }
         }
     }
@@ -246,13 +110,8 @@ static FLUSH_RPM: Mutex<f64> = Mutex::new(0.0);
 static FLUSH_MODE: Mutex<bool> = Mutex::new(false);
 static UL_PER_MIN: Mutex<f64> = Mutex::new(f64::NAN);
 static FLOW_HISTORY: Mutex<Deque<f64, FLOW_HISTORY_LEN>> = Mutex::new(Deque::new());
-static FLOW_INFO: Mutex<FlowSensorInfo> = Mutex::new(FlowSensorInfo {
-    air_in_line: false,
-    high_flow: false,
-    exponential_smoothing_active: false,
-    ul_per_min: 0.0,
-    degrees_c: 0.0,
-});
+static AIR_IN_LINE: Mutex<bool> = Mutex::new(false);
+static FLOW_RATE: Mutex<f64> = Mutex::new(0.0);
 
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
@@ -305,37 +164,44 @@ async fn main(spawner: Spawner) -> ! {
         .spawn(run_flow_rate_monitor(sensor, Arc::clone(&valve)))
         .unwrap();
     spawner.spawn(run_reset_monitor(Arc::clone(&tmc))).unwrap();
-    spawner.spawn(run_heartbeat(peripherals.WIFI)).unwrap();
-    run_coordinator(peripherals.USB_DEVICE, tmc, valve).await;
+    run_coordinator(peripherals.USB_DEVICE, peripherals.WIFI, tmc, valve).await;
 }
 
 async fn run_coordinator<'a>(
     device: USB_DEVICE<'a>,
+    wifi: WIFI<'a>,
     tmc: TmcHandle<'a>,
     valve: ValveHandle<'a>,
 ) -> ! {
-    let mut stream = PacketStream::new(device, Duration::from_secs(1));
+    let mut stream = PacketStream::new(device, Duration::from_millis(100));
+    let mut socket = Socket::new(wifi, Role::Client).await;
+    info!("Connected to CNC.");
+
     loop {
+        // Send heartbeat to CNC.
+        if socket.write(&[HEARTBEAT]).await.is_err() {
+            info!("Heartbeat failed, reconnecting...");
+            socket.connect().await;
+            info!("Connected to CNC.");
+        }
+
         let Ok(packet) = stream.read().await else {
-            info!("Packet read failed.");
             continue;
         };
 
         debug!("Received packet: {=[?]}", &packet[..]);
-        let response = match Request::from_bytes((&packet, 0)) {
-            Ok((_, packet)) => match handle_request(packet, &tmc, &valve).await {
+        let response = if let Ok((_, req)) = Request::from_bytes((&packet, 0)) {
+            match handle_request(req, &tmc, &valve, &mut socket).await {
                 Ok(response) => response,
                 Err(err) => {
                     info!("Handle request error: {}", err);
                     Response::Fail
                 }
-            },
-            Err(err) => {
-                info!("Failed to decode request: {:?}", Debug2Format(&err));
-                Response::Fail
             }
+        } else {
+            info!("Failed to decode request: {=[?]}", &packet[..]);
+            Response::Fail
         };
-
         let response_bytes = response.to_bytes().unwrap();
         debug!("Sending response: {=[?]}", &response_bytes[..]);
         stream.write(&response_bytes).await;
@@ -346,10 +212,13 @@ async fn handle_request<'a>(
     packet: Request,
     tmc: &TmcHandle<'a>,
     valve: &ValveHandle<'a>,
+    socket: &mut Socket<'a>,
 ) -> Result<Response> {
     let response = match packet {
+        // Pump commands.
         Request::Init => Response::Init(0),
-        Request::FlowSensorInfo => Response::FlowSensorInfo(FLOW_INFO.get_cloned()),
+        Request::GetAirInLine => Response::GetAirInLine(AIR_IN_LINE.get_cloned()),
+        Request::GetFlowRate => Response::GetFlowRate(FLOW_RATE.get_cloned()),
         Request::SetFlowUlPerMin(ul_per_min) => {
             UL_PER_MIN.set(ul_per_min);
             Response::SetFlowUlPerMin
@@ -368,11 +237,6 @@ async fn handle_request<'a>(
         Request::SetStoppedRmsAmps(amps) => {
             tmc.set_stopped_rms_amps(amps)?;
             Response::SetStoppedRmsAmps
-        }
-        Request::GetStopMode => Response::GetStopMode(tmc.stop_mode()?),
-        Request::SetStopMode(mode) => {
-            tmc.set_stop_mode(mode)?;
-            Response::SetStopMode
         }
         Request::GetMotorLoad => Response::GetMotorLoad(tmc.motor_load()?),
         Request::GetFlowHistory => {
@@ -404,6 +268,21 @@ async fn handle_request<'a>(
             Response::SetFlushRpm
         }
         Request::GetFlushing => Response::GetFlushing(FLUSH_MODE.get_cloned()),
+        // CNC commands: forward over WiFi.
+        Request::Home
+        | Request::IsHoming
+        | Request::SetPos(..)
+        | Request::GetPos
+        | Request::SetSpeed(..)
+        | Request::GetSpeed
+        | Request::SetAccel(..)
+        | Request::GetAccel => {
+            let bytes = packet.to_bytes().unwrap();
+            socket.write(&bytes).await?;
+            let resp = socket.read().await?;
+            let (_, response) = Response::from_bytes((&resp, 0))?;
+            response
+        }
     };
     Ok(response)
 }
@@ -449,7 +328,8 @@ async fn run_flow_rate_monitor(mut sensor: FlowSensor<'static>, valve: ValveHand
             FLUSH_RPM.set(0.0);
         }
 
-        FLOW_INFO.set(info);
+        AIR_IN_LINE.set(info.air_in_line);
+        FLOW_RATE.set(info.ul_per_min);
         FLOW_HISTORY.lock(|history| {
             if history.is_full() {
                 history.pop_front();
@@ -471,28 +351,6 @@ async fn run_reset_monitor(tmc: TmcHandle<'static>) -> ! {
             tmc.set_stopped_rms_amps(stopped).unwrap();
         }
         Timer::after_secs(1).await;
-    }
-}
-
-#[embassy_executor::task]
-async fn run_heartbeat(wifi: WIFI<'static>) -> ! {
-    let controller = Box::leak(Box::new(esp_radio::init().unwrap()));
-    let (mut wifi_controller, interfaces) =
-        esp_radio::wifi::new(controller, wifi, Default::default()).unwrap();
-    wifi_controller
-        .set_mode(esp_radio::wifi::WifiMode::Sta)
-        .unwrap();
-    wifi_controller.start().unwrap();
-
-    let mut socket = Socket::new(interfaces.esp_now, Role::Client).await;
-    info!("Connected to CNC.");
-    loop {
-        Timer::after_millis(100).await;
-        if socket.write(&[0]).await.is_err() {
-            info!("Heartbeat failed, reconnecting...");
-            socket = Socket::new(socket.into_inner(), Role::Client).await;
-            info!("Connected to CNC.");
-        }
     }
 }
 
